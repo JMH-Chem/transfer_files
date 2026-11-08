@@ -43,7 +43,7 @@ def _ensure_loaded() -> None:
 def all_converters() -> list[Converter]:
     _ensure_loaded()
     order = list(CATEGORIES)
-    return sorted(_registry.values(), key=lambda c: (order.index(c.category) if c.category in order else 99, c.name))
+    return sorted(_registry.values(), key=lambda c: (order.index(c.category) if c.category in order else 99, -c.priority, c.name))
 
 
 def get(name: str) -> Converter:

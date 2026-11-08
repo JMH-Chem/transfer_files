@@ -78,6 +78,8 @@ class ImagesToPdf(Converter):
     outputs = frozenset({"pdf"})
     can_merge = True
     merge_default = True
+    priority = 10
+    default_output = "pdf"
     options = (
         Option("page_size", "choice", "원본크기", "용지 크기", "원본크기 = 이미지 크기 그대로 한 쪽씩",
                choices=("원본크기", "A4", "A3", "A5", "B5", "Letter")),
@@ -140,6 +142,7 @@ class ImageConvert(Converter):
     description = "JPG/PNG/WEBP/HEIC 등 이미지 형식을 바꾸고, 필요하면 크기를 줄입니다."
     inputs = frozenset(IMAGE_EXTS)
     outputs = frozenset(IMAGE_OUT)
+    default_output = "jpg"
     options = (
         Option("quality", "int", 90, "품질", "JPG/WEBP 품질 (1~100)", min=1, max=100),
         Option("max_width", "int", 0, "최대 가로(px)", "0 = 줄이지 않음. 비율은 유지", min=0),

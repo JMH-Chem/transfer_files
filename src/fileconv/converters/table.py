@@ -193,6 +193,8 @@ class TextToExcel(Converter):
     inputs = frozenset(TEXT_EXTS)
     outputs = frozenset({"xlsx"})
     can_merge = True
+    priority = 10
+    default_output = "xlsx"
     options = (DELIM_OPT, ENC_OPT, HEADER_OPT, NUMBERS_OPT,
                Option("sheet_name", "str", "", "시트 이름", "비우면 파일 이름 사용 (합치기에서는 무시)"))
 
@@ -218,6 +220,7 @@ class ExcelToText(Converter):
     inputs = frozenset(EXCEL_EXTS)
     outputs = frozenset({"csv", "tsv", "json"})
     multi_output = True
+    default_output = "csv"
     options = (
         Option("sheet", "str", "", "시트", "시트 이름 또는 번호(1부터). 비우면 첫 시트, '전체' = 모든 시트를 각각 저장"),
         Option("out_encoding", "choice", "utf-8-sig", "저장 인코딩", "utf-8-sig = 엑셀에서 열어도 한글 안 깨짐",
@@ -266,6 +269,7 @@ class TableConvert(Converter):
     description = "CSV ↔ TSV ↔ JSON 변환, 또는 cp949(한글 윈도우) CSV 를 utf-8 로 바꾸는 등 인코딩 변환."
     inputs = frozenset(TEXT_EXTS)
     outputs = frozenset({"csv", "tsv", "json"})
+    default_output = "csv"
     options = (
         DELIM_OPT, ENC_OPT, HEADER_OPT,
         Option("out_encoding", "choice", "utf-8-sig", "저장 인코딩", "utf-8-sig = 엑셀에서 열어도 한글 안 깨짐",

@@ -54,6 +54,7 @@ def open_pdfium(path: Path, password: str = ""):
 @register
 class PdfTools(Converter):
     name = "pdf-tools"
+    default_output = "pdf"
     title = "PDF 합치기·페이지 추출·회전"
     category = "document"
     description = "여러 PDF 를 하나로 합치거나, 원하는 페이지만 뽑거나, 페이지를 회전합니다."
@@ -90,6 +91,8 @@ class PdfTools(Converter):
 @register
 class PdfSplit(Converter):
     name = "pdf-split"
+    default_output = "pdf"
+    priority = 8
     title = "PDF 나누기"
     category = "document"
     description = "PDF 를 N쪽씩 여러 파일로 나눕니다 (기본: 한 쪽당 한 파일)."
@@ -131,6 +134,8 @@ class PdfSplit(Converter):
 @register
 class PdfToImage(Converter):
     name = "pdf-to-image"
+    default_output = "png"
+    priority = 6
     title = "PDF → 이미지"
     category = "document"
     description = "PDF 각 페이지를 PNG/JPG 이미지로 저장합니다."
@@ -178,6 +183,8 @@ class PdfToImage(Converter):
 @register
 class PdfToText(Converter):
     name = "pdf-to-text"
+    default_output = "txt"
+    priority = 5
     title = "PDF → 텍스트"
     category = "document"
     description = "PDF 안의 글자를 텍스트 파일로 뽑아냅니다 (스캔한 PDF 는 글자가 없어서 비어 있을 수 있음)."
@@ -301,6 +308,8 @@ def _libreoffice_convert(src: Path, dst: Path, fmt: str, job: Job, timeout: floa
 @register
 class OfficeToPdf(Converter):
     name = "office-to-pdf"
+    default_output = "pdf"
+    priority = 9
     title = "Word/엑셀/PPT → PDF"
     category = "document"
     description = "오피스 문서를 PDF 로 바꿉니다. Windows 에서는 MS Office, 없으면 LibreOffice 를 사용합니다."
@@ -377,6 +386,8 @@ img { max-width: 100%; }
 @register
 class MarkdownToHtml(Converter):
     name = "markdown-to-html"
+    default_output = "html"
+    priority = 3
     title = "Markdown → HTML"
     category = "document"
     description = "Markdown(.md) 문서를 보기 좋은 HTML 웹페이지로 바꿉니다 (표, 코드 블록, 목차 지원)."
@@ -407,6 +418,8 @@ class MarkdownToHtml(Converter):
 @register
 class DocxToText(Converter):
     name = "docx-to-text"
+    default_output = "txt"
+    priority = 2
     title = "Word(docx) → 텍스트"
     category = "document"
     description = "Word 문서의 글자(표 포함)를 텍스트 파일로 뽑아냅니다. Word 가 없어도 됩니다."

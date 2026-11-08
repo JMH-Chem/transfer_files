@@ -93,6 +93,7 @@ class ToAudio(Converter):
     description = "동영상에서 음성만 뽑아내거나, 음성 파일 형식을 바꿉니다 (구간 자르기 가능)."
     inputs = frozenset(VIDEO_EXTS | AUDIO_EXTS)
     outputs = frozenset(AUDIO_OUT)
+    default_output = "mp3"
     options = (
         Option("bitrate", "choice", "192k", "비트레이트", "음질(mp3/aac/m4a/ogg/opus에만 적용). 클수록 고음질·큰 파일",
                choices=("64k", "96k", "128k", "160k", "192k", "256k", "320k")),

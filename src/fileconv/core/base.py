@@ -176,6 +176,9 @@ class Converter(ABC):
     multi_output: ClassVar[bool] = False
     """True면 입력 하나에서 파일 여러 개가 나올 수 있다 (예: PDF → 페이지별 이미지)."""
     priority: ClassVar[int] = 0
+    """같은 형식 조합을 여러 변환기가 처리할 때, 또는 목록 정렬/자동 선택 시 높은 쪽이 먼저."""
+    default_output: ClassVar[str] = ""
+    """GUI 에서 처음 선택되어 있을 출력 형식."""
 
     def is_available(self) -> tuple[bool, str]:
         """필요한 프로그램/라이브러리가 있는지. (사용 가능 여부, 안내 메시지)"""
