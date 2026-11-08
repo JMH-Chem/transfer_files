@@ -55,3 +55,19 @@ def test_docx_to_text_and_md(docx_file):
 def test_docx_to_pdf_libreoffice(docx_file):
     [pdf] = convert([docx_file], "pdf", options={"engine": "LibreOffice"})
     assert len(PdfReader(pdf).pages) >= 1
+
+
+def test_text_and_markdown_to_pdf(tmp_path):
+    import pypdfium2
+
+    md = tmp_path / "회의록.md"
+    md.write_text("# 회의록\n\n| 이름 | 역할 |\n|---|---|\n| 홍길동 | 개발 |\n", encoding="utf-8")
+    txt = tmp_path / "메모.txt"
+    txt.write_text("한글 메모입니다\n" * 200, encoding="cp949")
+    outs = convert([md, txt], "pdf", options={"page_size": "A5", "font_size": "12"})
+    md_pdf = pypdfium2.PdfDocument(str(outs[0]))
+    assert "홍길동" in md_pdf[0].get_textpage().get_text_bounded()
+    txt_pdf = pypdfium2.PdfDocument(str(outs[1]))
+    assert len(txt_pdf) > 1  # 여러 쪽으로 나뉨
+    w, h = txt_pdf[0].get_size()
+    assert round(w) == 420 and round(h) == 595  # A5

@@ -12,7 +12,7 @@ from pathlib import Path
 from ..core.base import Converter, Job, Option, parse_pages
 from ..core.errors import ConvertError
 from ..core.registry import register
-from ..core.tools import find_soffice, has_ms_office, popen_kwargs
+from ..core.tools import IS_WINDOWS as IS_WINDOWS_, find_soffice, has_ms_office, popen_kwargs
 from ..core.utils import unique_path
 
 PAGES_OPT = Option("pages", "pages", None, "페이지", "예: 1-3,5,8- (비우면 전체)")
@@ -461,4 +461,120 @@ class DocxToText(Converter):
                 lines.append("")
         job.output.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
         job.progress(1.0)
+        return [job.output]
+
+
+# ---------------------------------------------------------------- 텍스트/Markdown/HTML → PDF (Qt 로 그림 → 한글 글꼴 문제 없음)
+
+_qt_app = None
+PRINT_CSS = """
+body { font-size: %(size)dpt; }
+h1 { font-size: %(h1)dpt; } h2 { font-size: %(h2)dpt; } h3 { font-size: %(h3)dpt; }
+pre, code { font-family: %(mono)s; background-color: #f3f4f6; }
+table { border-collapse: collapse; } th, td { border: 1px solid #999; padding: 4px; }
+th { background-color: #eeeeee; }
+blockquote { color: #555; margin-left: 12px; }
+"""
+
+
+def _ensure_qt() -> None:
+    """Qt 글꼴/그리기 기능을 쓰기 위한 QApplication (GUI 실행 중이면 이미 있음)."""
+    global _qt_app
+    import os
+
+    from PySide6.QtWidgets import QApplication
+
+    if QApplication.instance() is None:
+        if not IS_WINDOWS_ and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+            os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        # QGuiApplication 이 아닌 QApplication 으로 만들어야 같은 프로세스에서 GUI 창도 띄울 수 있다
+        _qt_app = QApplication([])
+
+
+def _default_font() -> str:
+    from PySide6.QtGui import QFontDatabase
+
+    families = set(QFontDatabase.families())
+    for name in ("Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Noto Sans KR",
+                 "NanumGothic", "나눔고딕", "NanumBarunGothic"):
+        if name in families:
+            return name
+    return QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()
+
+
+def _mono_font() -> str:
+    from PySide6.QtGui import QFontDatabase
+
+    families = set(QFontDatabase.families())
+    for name in ("D2Coding", "Consolas", "NanumGothicCoding", "Noto Sans Mono CJK KR", "DejaVu Sans Mono", "Courier New"):
+        if name in families:
+            return name
+    return QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
+
+
+@register
+class TextToPdf(Converter):
+    name = "text-to-pdf"
+    title = "텍스트/Markdown/HTML → PDF"
+    category = "document"
+    description = "txt·md·html 문서를 PDF 로 만듭니다. 한글 글꼴(맑은 고딕 등)을 자동으로 사용합니다."
+    inputs = frozenset({"txt", "md", "html"})
+    outputs = frozenset({"pdf"})
+    default_output = "pdf"
+    priority = 4
+    options = (
+        Option("page_size", "choice", "A4", "용지 크기", choices=("A4", "A3", "A5", "B5", "Letter")),
+        Option("landscape", "bool", False, "가로 방향"),
+        Option("font_size", "int", 11, "글자 크기(pt)", min=6, max=48),
+        Option("margin_mm", "float", 20.0, "여백(mm)", min=0, max=60),
+        Option("font", "str", "", "글꼴", "비우면 자동 (Windows: 맑은 고딕)"),
+        Option("monospace", "bool", False, "고정폭 글꼴(txt)", "txt 파일을 코드처럼 고정폭 글꼴로"),
+    )
+
+    def convert(self, job: Job) -> list[Path]:
+        _ensure_qt()
+        from PySide6.QtCore import QMarginsF
+        from PySide6.QtGui import QFont, QPageLayout, QPageSize, QPdfWriter, QTextDocument
+
+        from ..core.utils import detect_encoding
+
+        src = job.inputs[0]
+        text = src.read_text(encoding=detect_encoding(src))
+        ext = src.suffix.lower().lstrip(".")
+        size = job.opt("font_size", 11)
+        family = job.opt("font") or _default_font()
+        mono = _mono_font()
+
+        doc = QTextDocument()
+        doc.setDefaultFont(QFont(mono if (ext == "txt" and job.opt("monospace")) else family, size))
+        doc.setDefaultStyleSheet(PRINT_CSS % {"size": size, "h1": size * 2, "h2": int(size * 1.6),
+                                              "h3": int(size * 1.3), "mono": f"'{mono}'"})
+        if ext == "md":
+            import markdown
+
+            doc.setHtml(markdown.markdown(text, extensions=["extra", "sane_lists", "nl2br"]))
+        elif ext in ("html", "htm"):
+            doc.setHtml(text)
+        else:
+            doc.setPlainText(text)
+        job.progress(0.4)
+
+        page_ids = {"A4": QPageSize.PageSizeId.A4, "A3": QPageSize.PageSizeId.A3, "A5": QPageSize.PageSizeId.A5,
+                    "B5": QPageSize.PageSizeId.B5, "Letter": QPageSize.PageSizeId.Letter}
+        writer = QPdfWriter(str(job.output))
+        writer.setTitle(src.stem)
+        writer.setCreator("fileconv")
+        writer.setResolution(300)
+        margin = job.opt("margin_mm", 20.0)
+        layout = QPageLayout(
+            QPageSize(page_ids[job.opt("page_size", "A4")]),
+            QPageLayout.Orientation.Landscape if job.opt("landscape") else QPageLayout.Orientation.Portrait,
+            QMarginsF(margin, margin, margin, margin),
+            QPageLayout.Unit.Millimeter,
+        )
+        writer.setPageLayout(layout)
+        doc.print_(writer)
+        del writer  # 파일을 닫아 저장을 끝냄
+        if not job.output.exists() or job.output.stat().st_size == 0:
+            raise ConvertError("PDF 를 만들지 못했습니다")
         return [job.output]
