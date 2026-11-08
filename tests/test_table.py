@@ -28,7 +28,7 @@ def test_tab_and_whitespace_txt(tmp_path):
 
 def test_no_header_option(tmp_path):
     f = tmp_path / "n.csv"
-    f.write_text("1,2\n3,4\n")
+    f.write_text("1,2\n3,4\n", encoding="utf-8")
     [x] = convert([f], "xlsx", options={"header": "false"})
     ws = openpyxl.load_workbook(x).active
     assert [[c.value for c in r] for r in ws.iter_rows()] == [[1, 2], [3, 4]]
@@ -36,7 +36,7 @@ def test_no_header_option(tmp_path):
 
 def test_json_to_excel_sheets(tmp_path):
     f = tmp_path / "data.json"
-    f.write_text(json.dumps({"직원": [{"이름": "가", "부서": {"이름": "개발"}}], "부서": [{"코드": 1}]}, ensure_ascii=False))
+    f.write_text(json.dumps({"직원": [{"이름": "가", "부서": {"이름": "개발"}}], "부서": [{"코드": 1}]}, ensure_ascii=False), encoding="utf-8")
     [x] = convert([f], "xlsx")
     wb = openpyxl.load_workbook(x)
     assert wb.sheetnames == ["직원", "부서"]
@@ -45,7 +45,7 @@ def test_json_to_excel_sheets(tmp_path):
 
 def test_merge_csvs_into_sheets(tmp_path, korean_csv):
     other = tmp_path / "other.csv"
-    other.write_text("a,b\n1,2\n")
+    other.write_text("a,b\n1,2\n", encoding="utf-8")
     [x] = convert([korean_csv, other], "xlsx", merge=True)
     assert openpyxl.load_workbook(x).sheetnames == ["고객목록", "other"]
 

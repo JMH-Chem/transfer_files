@@ -13,24 +13,26 @@
 
 | 분류 | 변환 | 이름 | 입력 → 출력 | 여러 파일 합치기 |
 |---|---|---|---|---|
-| 미디어 | 동영상/음성 → 음성 | `to-audio` | mp4 mkv avi mov wmv webm … / mp3 wav m4a … → **mp3 wav aac m4a flac ogg opus** | |
+| 미디어 | 동영상/음성 → 음성 | `to-audio` | mp4 mkv avi mov wmv webm … / mp3 wav m4a … → **mp3 wav aac m4a flac ogg opus** | O (이어 붙이기) |
 | | 동영상 형식 변환·압축 | `video-convert` | mp4 mkv avi mov webm gif … → **mp4 mkv webm mov avi** | |
 | | 동영상 → GIF | `video-to-gif` | 동영상 → **gif** | |
 | | 동영상 자막 추출 | `subtitle-extract` | mkv mp4 … → **srt ass vtt** | |
 | 이미지 | 이미지 → PDF | `images-to-pdf` | jpg png webp bmp gif tiff heic → **pdf** | O (기본) |
-| | 이미지 형식 변환 | `image-convert` | jpg png webp bmp gif tiff heic ico → **jpg png webp bmp gif tiff ico** | |
+| | 이미지 형식 변환·크기·회전·흑백 | `image-convert` | jpg png webp bmp gif tiff heic ico → **jpg png webp bmp gif tiff ico** | |
 | 표/엑셀 | 텍스트/CSV/JSON → 엑셀 | `text-to-excel` | txt csv tsv json → **xlsx** | O (파일마다 시트) |
 | | 엑셀 → CSV/TSV/JSON | `excel-to-text` | xlsx xlsm → **csv tsv json** | |
 | | CSV/TSV/JSON 형식·인코딩 변환 | `table-convert` | txt csv tsv json → **csv tsv json** | |
-| 문서/PDF | PDF 합치기·페이지 추출·회전 | `pdf-tools` | pdf → **pdf** | O (기본) |
+| 문서/PDF | PDF 합치기·페이지 추출·회전·암호 | `pdf-tools` | pdf → **pdf** | O (기본) |
 | | Word/엑셀/PPT → PDF | `office-to-pdf` | docx doc rtf odt xlsx xls pptx ppt … → **pdf** | |
 | | PDF 나누기 | `pdf-split` | pdf → **pdf** (여러 개) | |
+| | PDF 용량 줄이기 | `pdf-compress` | pdf → **pdf** | |
 | | PDF → 이미지 | `pdf-to-image` | pdf → **png jpg webp** | |
 | | PDF → 텍스트 | `pdf-to-text` | pdf → **txt** | |
 | | 텍스트/Markdown/HTML → PDF | `text-to-pdf` | txt md html → **pdf** | |
 | | Markdown → HTML | `markdown-to-html` | md → **html** | |
 | | Word → 텍스트 | `docx-to-text` | docx → **txt md** | |
 | | 한글(HWP/HWPX) → 텍스트 | `hwp-to-text` | hwp hwpx → **txt** | |
+| | 한글(HWP/HWPX) → PDF | `hwp-to-pdf` | hwp hwpx → **pdf** (한컴오피스 필요) | |
 
 `fconv list` 로 언제든 최신 목록을 볼 수 있고, `fconv info <이름>` 으로 각 변환의 옵션을 볼 수 있습니다.
 
@@ -59,6 +61,7 @@ pip install -e .
 
 > **Word/엑셀/PPT → PDF** 는 MS Office 가 설치되어 있으면 그것을 쓰고, 없으면 무료인
 > [LibreOffice](https://ko.libreoffice.org) 를 씁니다. 둘 다 없으면 이 변환만 "사용 불가"로 표시됩니다.
+> **한글 → PDF** 는 한컴오피스 한글이 설치된 Windows 에서만 됩니다 (글자만 뽑는 **한글 → 텍스트** 는 어디서나 가능).
 
 ---
 
@@ -108,6 +111,18 @@ fconv convert 보고서.pdf 부록.pdf -t pdf --merge -o 합본.pdf
 
 ```bash
 fconv convert 보고서.pdf -t pdf -u pdf-split
+```
+
+```bash
+fconv convert 스캔본.pdf -t pdf -u pdf-compress -O image_quality=50
+```
+
+```bash
+fconv convert 계약서.pdf -t pdf -O new_password=1234
+```
+
+```bash
+fconv convert 녹음1.m4a 녹음2.m4a 녹음3.m4a -t mp3 --merge -o 전체녹음.mp3
 ```
 
 ```bash

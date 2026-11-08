@@ -49,6 +49,13 @@ def open_pdfium(path: Path, password: str = ""):
         raise ConvertError(f"PDF 를 열 수 없습니다: {path.name} ({msg})") from exc
 
 
+def encrypt_writer(writer, password: str) -> None:
+    try:
+        writer.encrypt(user_password=password, owner_password=None, algorithm="AES-256")
+    except Exception:  # AES 에 필요한 cryptography 패키지가 없으면 RC4 로
+        writer.encrypt(user_password=password, owner_password=None, algorithm="RC4-128")
+
+
 # ---------------------------------------------------------------- PDF → PDF
 
 @register
@@ -57,7 +64,7 @@ class PdfTools(Converter):
     default_output = "pdf"
     title = "PDF 합치기·페이지 추출·회전"
     category = "document"
-    description = "여러 PDF 를 하나로 합치거나, 원하는 페이지만 뽑거나, 페이지를 회전합니다."
+    description = "여러 PDF 를 하나로 합치거나, 원하는 페이지만 뽑거나, 회전하거나, 암호를 걸고 풉니다."
     inputs = frozenset({"pdf"})
     outputs = frozenset({"pdf"})
     can_merge = True
@@ -67,6 +74,7 @@ class PdfTools(Converter):
         PAGES_OPT,
         Option("rotate", "choice", "0", "회전", "시계 방향 회전 각도", choices=("0", "90", "180", "270")),
         PASSWORD_OPT,
+        Option("new_password", "str", "", "새 비밀번호 걸기", "결과 PDF 에 열기 암호를 겁니다 (비우면 암호 없음)"),
     )
 
     def convert(self, job: Job) -> list[Path]:
@@ -83,6 +91,8 @@ class PdfTools(Converter):
             job.progress(0.9 * (i + 1) / len(job.inputs))
         if not writer.pages:
             raise ConvertError("선택한 페이지가 없습니다")
+        if job.opt("new_password"):
+            encrypt_writer(writer, job.opt("new_password"))
         with open(job.output, "wb") as fh:
             writer.write(fh)
         return [job.output]
@@ -127,6 +137,65 @@ class PdfSplit(Converter):
             outputs.append(dest)
             job.progress((n + 1) / len(chunks))
         return outputs
+
+
+@register
+class PdfCompress(Converter):
+    name = "pdf-compress"
+    default_output = "pdf"
+    priority = 7
+    title = "PDF 용량 줄이기"
+    category = "document"
+    description = "PDF 안의 사진을 다시 압축하고 크기를 줄여 용량을 줄입니다 (스캔·사진이 많은 PDF 에 효과적)."
+    inputs = frozenset({"pdf"})
+    outputs = frozenset({"pdf"})
+    options = (
+        Option("image_quality", "int", 60, "사진 품질", "낮을수록 작아짐 (30~80 권장)", min=10, max=95),
+        Option("max_image_px", "int", 1600, "사진 최대 크기(px)", "긴 변 기준. 0 = 크기는 그대로", min=0),
+        Option("grayscale", "bool", False, "사진을 흑백으로"),
+        PASSWORD_OPT,
+    )
+
+    def convert(self, job: Job) -> list[Path]:
+        from pypdf import PdfWriter
+
+        from .image import flatten
+
+        src = job.inputs[0]
+        reader = open_pdf(src, job.opt("password", ""))
+        writer = PdfWriter(clone_from=reader)
+        quality, max_px = job.opt("image_quality", 60), job.opt("max_image_px", 1600)
+        pages = list(writer.pages)
+        for n, page in enumerate(pages):
+            for img in list(page.images):
+                try:
+                    obj = img.indirect_reference.get_object() if img.indirect_reference else None
+                    if obj is not None and ("/SMask" in obj or "/Mask" in obj):
+                        continue  # 투명도가 있는 그림은 건드리지 않음
+                    pil = img.image
+                    if pil is None or max(pil.size) < 64:
+                        continue
+                    if max_px and max(pil.size) > max_px:
+                        pil = pil.copy()
+                        pil.thumbnail((max_px, max_px))
+                    if job.opt("grayscale"):
+                        pil = pil.convert("L")
+                    elif pil.mode not in ("RGB", "L"):
+                        pil = flatten(pil)
+                    img.replace(pil, quality=quality)
+                except Exception:
+                    continue  # 특이한 형식의 그림은 원래대로 둔다
+            page.compress_content_streams()
+            job.progress(0.9 * (n + 1) / max(1, len(pages)))
+        try:
+            writer.compress_identical_objects()  # 같은 내용 객체 합치기 (기본값: 중복·고아 객체 제거)
+        except AttributeError:  # 오래된 pypdf
+            pass
+        with open(job.output, "wb") as fh:
+            writer.write(fh)
+        if job.output.stat().st_size >= src.stat().st_size:  # 더 커졌으면 원본 그대로
+            job.output.write_bytes(src.read_bytes())
+        return [job.output]
 
 
 # ---------------------------------------------------------------- PDF → 이미지 / 텍스트

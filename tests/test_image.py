@@ -38,3 +38,11 @@ def test_image_to_webp_and_ico(images):
     assert Image.open(webp).format == "WEBP"
     [ico] = convert([images[0]], "ico")
     assert Image.open(ico).format == "ICO"
+
+
+def test_rotate_flip_grayscale(images):
+    [out] = convert([images[0]], "png", options={"rotate": "90", "flip": "좌우", "grayscale": "true"})
+    img = Image.open(out)
+    assert img.size == (300, 400) and img.mode == "L"
+    [jpg] = convert([images[3]], "jpg", options={"grayscale": "true"})  # 투명 + 흑백 → JPG
+    assert Image.open(jpg).mode in ("L", "RGB")

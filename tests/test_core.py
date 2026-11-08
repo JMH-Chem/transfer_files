@@ -50,14 +50,14 @@ def test_option_parsing():
 
 def test_unknown_option_rejected(tmp_path):
     f = tmp_path / "a.csv"
-    f.write_text("a,b\n1,2\n")
+    f.write_text("a,b\n1,2\n", encoding="utf-8")
     with pytest.raises(OptionError, match="알 수 없는 옵션"):
         engine.plan([f], "xlsx", options={"nope": "1"})
 
 
 def test_no_converter_message(tmp_path):
     f = tmp_path / "a.csv"
-    f.write_text("a\n")
+    f.write_text("a\n", encoding="utf-8")
     with pytest.raises(NoConverterError, match="가능한 형식"):
         engine.plan([f], "mp3")
 
@@ -84,7 +84,7 @@ def test_unique_path_and_never_overwrite_input(tmp_path):
 def test_output_rules(tmp_path):
     a, b = tmp_path / "a.csv", tmp_path / "b.csv"
     for p in (a, b):
-        p.write_text("x\n1\n")
+        p.write_text("x\n1\n", encoding="utf-8")
     out_dir = tmp_path / "out"
     tasks = engine.plan([a, b], "xlsx", output=out_dir)
     assert [t.output for t in tasks] == [out_dir / "a.xlsx", out_dir / "b.xlsx"]
@@ -98,7 +98,7 @@ def test_merge_requires_support(tmp_path):
     files = []
     for n in ("a", "b"):
         p = tmp_path / f"{n}.md"
-        p.write_text("# hi")
+        p.write_text("# hi", encoding="utf-8")
         files.append(p)
     with pytest.raises(ConvertError, match="합치기"):
         engine.plan(files, "html", merge=True)

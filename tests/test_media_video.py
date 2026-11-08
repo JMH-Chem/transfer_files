@@ -5,14 +5,14 @@ from PIL import Image
 
 from fileconv.core import engine
 from fileconv.core.tools import find_ffmpeg
-from fileconv.converters.media import probe
+from fileconv.converters.media import ffmpeg_info, probe
 
 from helpers import convert
 
 
 def test_video_convert_resolution_and_quality(video):
     [out] = convert([video], "webm", options={"resolution": "360p", "quality": "낮음(작은 파일)"})
-    info = subprocess.run([find_ffmpeg(), "-hide_banner", "-i", str(out)], capture_output=True, text=True).stderr
+    info = ffmpeg_info(out)
     assert "vp9" in info and "opus" in info
     [mp4] = convert([video], "mkv", options={"audio": "false", "start": "1", "end": "2"})
     duration, has_audio = probe(find_ffmpeg(), mp4)

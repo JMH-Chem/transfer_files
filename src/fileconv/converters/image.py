@@ -139,7 +139,7 @@ class ImageConvert(Converter):
     name = "image-convert"
     title = "이미지 형식 변환"
     category = "image"
-    description = "JPG/PNG/WEBP/HEIC 등 이미지 형식을 바꾸고, 필요하면 크기를 줄입니다."
+    description = "JPG/PNG/WEBP/HEIC 등 이미지 형식을 바꾸고, 크기 줄이기·회전·흑백 변환도 할 수 있습니다."
     inputs = frozenset(IMAGE_EXTS)
     outputs = frozenset(IMAGE_OUT)
     default_output = "jpg"
@@ -147,6 +147,9 @@ class ImageConvert(Converter):
         Option("quality", "int", 90, "품질", "JPG/WEBP 품질 (1~100)", min=1, max=100),
         Option("max_width", "int", 0, "최대 가로(px)", "0 = 줄이지 않음. 비율은 유지", min=0),
         Option("max_height", "int", 0, "최대 세로(px)", "0 = 줄이지 않음. 비율은 유지", min=0),
+        Option("rotate", "choice", "0", "회전", "시계 방향 회전 각도", choices=("0", "90", "180", "270")),
+        Option("flip", "choice", "안 함", "뒤집기", choices=("안 함", "좌우", "상하")),
+        Option("grayscale", "bool", False, "흑백으로"),
         Option("keep_exif", "bool", False, "촬영 정보 유지", "JPG/WEBP 저장 시 EXIF(촬영일, 위치 등) 유지"),
     )
 
@@ -164,10 +167,20 @@ class ImageConvert(Converter):
                 img = img.copy()
                 img.thumbnail(limit, Image.Resampling.LANCZOS)
 
+        turns = {"90": Image.Transpose.ROTATE_270, "180": Image.Transpose.ROTATE_180, "270": Image.Transpose.ROTATE_90}
+        if job.opt("rotate", "0") in turns:
+            img = img.transpose(turns[job.opt("rotate")])
+        if job.opt("flip", "안 함") == "좌우":
+            img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        elif job.opt("flip") == "상하":
+            img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+        if job.opt("grayscale"):
+            img = img.convert("LA") if img.mode in ("RGBA", "LA", "PA") else img.convert("L")
+
         fmt = _PIL_FORMATS[job.target if job.target in _PIL_FORMATS else "png"]
         save_kwargs: dict = {}
         if fmt == "JPEG":
-            img = flatten(img)
+            img = flatten(img.convert("RGBA") if img.mode == "LA" else img)
             if img.mode == "CMYK":
                 img = img.convert("RGB")
             save_kwargs = {"quality": job.opt("quality", 90), "optimize": True}

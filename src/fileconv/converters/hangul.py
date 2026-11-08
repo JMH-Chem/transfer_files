@@ -17,6 +17,7 @@ from xml.etree import ElementTree as ET
 from ..core.base import Converter, Job, Option
 from ..core.errors import ConvertError
 from ..core.registry import register
+from ..core.tools import has_hancom
 from ..core.utils import natural_key
 
 HWPTAG_PARA_TEXT = 0x10 + 51
@@ -159,4 +160,65 @@ class HwpToText(Converter):
         if job.opt("skip_empty"):
             paragraphs = [p for p in paragraphs if p.strip()]
         job.output.write_text("\n".join(p.rstrip("\r") for p in paragraphs).strip() + "\n", encoding="utf-8")
+        return [job.output]
+
+
+def _hancom_to_pdf(src: Path, dst: Path) -> None:
+    """Windows: 설치된 한컴오피스 한글로 PDF 저장 (pywin32 필요)."""
+    import pythoncom
+    import win32com.client
+
+    pythoncom.CoInitialize()  # GUI 백그라운드 스레드에서도 동작하도록
+    hwp = None
+    try:
+        hwp = win32com.client.Dispatch("HWPFrame.HwpObject")
+        try:  # 보안 승인 모듈이 등록되어 있으면 '파일 접근 허용' 확인 창이 뜨지 않는다
+            hwp.RegisterModule("FilePathCheckDLL", "FilePathCheckerModule")
+        except Exception:
+            pass
+        try:
+            hwp.XHwpWindows.Item(0).Visible = False
+        except Exception:
+            pass
+        fmt = "HWPX" if src.suffix.lower() == ".hwpx" else "HWP"
+        if not hwp.Open(str(src), fmt, "forceopen:true"):
+            raise ConvertError(f"한글에서 문서를 열 수 없습니다: {src.name}")
+        if not hwp.SaveAs(str(dst), "PDF", ""):
+            raise ConvertError("한글에서 PDF 로 저장하지 못했습니다")
+    except ConvertError:
+        raise
+    except Exception as exc:
+        raise ConvertError(f"한컴오피스로 PDF 변환 실패: {exc}") from exc
+    finally:
+        if hwp is not None:
+            try:
+                hwp.Clear(1)
+                hwp.Quit()
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
+
+
+@register
+class HwpToPdf(Converter):
+    name = "hwp-to-pdf"
+    title = "한글(HWP/HWPX) → PDF"
+    category = "document"
+    description = ("한컴오피스 한글을 이용해 한글 문서를 PDF 로 바꿉니다 (Windows + 한컴오피스 필요). "
+                   "처음 실행할 때 한글이 '파일 접근 허용' 여부를 물을 수 있습니다.")
+    inputs = frozenset({"hwp", "hwpx"})
+    outputs = frozenset({"pdf"})
+    default_output = "pdf"
+    priority = 2
+
+    def is_available(self) -> tuple[bool, str]:
+        if has_hancom():
+            return True, ""
+        return False, "Windows 에 한컴오피스 한글이 설치되어 있어야 합니다 (글자만 필요하면 'HWP → 텍스트' 사용)"
+
+    def convert(self, job: Job) -> list[Path]:
+        job.progress(0.1)
+        _hancom_to_pdf(job.inputs[0].resolve(), job.output.resolve())
+        if not job.output.exists():
+            raise ConvertError("PDF 파일이 만들어지지 않았습니다")
         return [job.output]

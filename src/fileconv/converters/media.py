@@ -30,17 +30,22 @@ _DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
 _AUDIO_STREAM_RE = re.compile(r"Stream #\d+:\d+.*?: Audio:")
 
 
-def probe(ffmpeg: str, path: Path) -> tuple[float | None, bool]:
-    """(재생 시간 초, 오디오 트랙 존재 여부). ffprobe 없이 'ffmpeg -i' 출력에서 읽는다."""
+def ffmpeg_info(path: Path) -> str:
+    """'ffmpeg -i 파일' 이 알려주는 스트림 정보 (ffprobe 없이)."""
     proc = subprocess.run(
-        [ffmpeg, "-hide_banner", "-i", str(path)],
+        [find_ffmpeg(), "-hide_banner", "-i", str(path)],
         capture_output=True,
         text=True,
-        encoding="utf-8",
+        encoding="utf-8",  # Windows 기본 인코딩(cp949/cp1252)으로 읽으면 한글 파일 이름에서 깨짐
         errors="replace",
         **popen_kwargs(),
     )
-    info = proc.stderr
+    return proc.stderr or ""
+
+
+def probe(ffmpeg: str, path: Path) -> tuple[float | None, bool]:
+    """(재생 시간 초, 오디오 트랙 존재 여부)."""
+    info = ffmpeg_info(path)
     m = _DURATION_RE.search(info)
     duration = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else None
     return duration, bool(_AUDIO_STREAM_RE.search(info))
@@ -90,10 +95,11 @@ class ToAudio(Converter):
     name = "to-audio"
     title = "동영상/음성 → 음성"
     category = "media"
-    description = "동영상에서 음성만 뽑아내거나, 음성 파일 형식을 바꿉니다 (구간 자르기 가능)."
+    description = "동영상에서 음성만 뽑아내거나, 음성 파일 형식을 바꿉니다. 구간 자르기, 여러 파일 이어 붙이기 가능."
     inputs = frozenset(VIDEO_EXTS | AUDIO_EXTS)
     outputs = frozenset(AUDIO_OUT)
     default_output = "mp3"
+    can_merge = True  # 여러 파일을 이어 붙여 음성 파일 하나로
     options = (
         Option("bitrate", "choice", "192k", "비트레이트", "음질(mp3/aac/m4a/ogg/opus에만 적용). 클수록 고음질·큰 파일",
                choices=("64k", "96k", "128k", "160k", "192k", "256k", "320k")),
@@ -110,9 +116,63 @@ class ToAudio(Converter):
             return True, ""
         return False, "ffmpeg 를 찾을 수 없습니다. 'pip install imageio-ffmpeg' 로 설치하세요."
 
-    def convert(self, job: Job) -> list[Path]:
-        src = job.inputs[0]
+    @staticmethod
+    def codec_args(job: Job) -> list[str]:
+        """출력 형식에 맞는 코덱·비트레이트·샘플레이트·채널 인자."""
         codec, uses_bitrate = CODECS[job.target if job.target in CODECS else "mp3"]
+        args = ["-c:a", codec]
+        if uses_bitrate:
+            args += ["-b:a", job.opt("bitrate", "192k")]
+        if job.opt("sample_rate", "원본") != "원본":
+            args += ["-ar", job.opt("sample_rate")]
+        elif job.target == "opus":
+            args += ["-ar", "48000"]  # opus 는 48kHz 등 정해진 값만 허용
+        channels = job.opt("channels", "원본")
+        if channels != "원본":
+            args += ["-ac", "1" if channels == "mono" else "2"]
+        if job.target == "aac":
+            args += ["-f", "adts"]
+        elif job.target == "m4a":
+            args += ["-f", "ipod"]
+        return args
+
+    def merge(self, job: Job) -> list[Path]:
+        """여러 파일을 순서대로 이어 붙인다 (형식·샘플레이트가 달라도 됨)."""
+        ffmpeg = find_ffmpeg()
+        total = 0.0
+        args: list[str] = []
+        for path in job.inputs:
+            duration, has_audio = probe(ffmpeg, path)
+            if not has_audio:
+                raise ConvertError(f"오디오 트랙이 없는 파일입니다: {path.name}")
+            total += duration or 0
+            args += ["-i", str(path)]
+        rate = job.opt("sample_rate", "원본")
+        rate = "48000" if rate == "원본" else rate
+        layout = "mono" if job.opt("channels") == "mono" else "stereo"
+        n = len(job.inputs)
+        chain = "".join(f"[{i}:a:0]aresample={rate},aformat=sample_fmts=fltp:channel_layouts={layout}[a{i}];"
+                        for i in range(n))
+        chain += "".join(f"[a{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1"
+        start, end = job.opt("start"), job.opt("end")
+        if start is not None or end is not None:
+            if start is not None and end is not None and end <= start:
+                raise ConvertError("끝 시간은 시작 시간보다 뒤여야 합니다")
+            trim = ":".join(p for p in (f"start={start}" if start is not None else "",
+                                        f"end={end}" if end is not None else "") if p)
+            chain += f",atrim={trim},asetpts=PTS-STARTPTS"
+            total = (min(end, total) if end is not None else total) - (start or 0)
+        volume = job.opt("volume", 1.0)
+        if abs(volume - 1.0) > 1e-9:
+            chain += f",volume={volume}"
+        args += ["-filter_complex", chain + "[out]", "-map", "[out]", *self.codec_args(job), "-y", str(job.output)]
+        run_ffmpeg(args, job, total or None)
+        return [job.output]
+
+    def convert(self, job: Job) -> list[Path]:
+        if len(job.inputs) > 1:
+            return self.merge(job)
+        src = job.inputs[0]
         duration, has_audio = probe(find_ffmpeg(), src)
         if not has_audio:
             raise ConvertError(f"오디오 트랙이 없는 파일입니다: {src.name}")
@@ -130,24 +190,11 @@ class ToAudio(Converter):
         args += ["-i", str(src)]
         if end is not None:
             args += ["-t", f"{end - (start or 0):.3f}"]
-        args += ["-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "0", "-c:a", codec]
-        if uses_bitrate:
-            args += ["-b:a", job.opt("bitrate", "192k")]
-        if job.opt("sample_rate", "원본") != "원본":
-            args += ["-ar", job.opt("sample_rate")]
-        elif job.target == "opus":
-            args += ["-ar", "48000"]  # opus 는 48kHz 등 정해진 값만 허용
-        channels = job.opt("channels", "원본")
-        if channels != "원본":
-            args += ["-ac", "1" if channels == "mono" else "2"]
+        args += ["-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "0"]
         volume = job.opt("volume", 1.0)
         if abs(volume - 1.0) > 1e-9:
             args += ["-af", f"volume={volume}"]
-        if job.target == "aac":
-            args += ["-f", "adts"]
-        elif job.target == "m4a":
-            args += ["-f", "ipod"]
-        args += ["-y", str(job.output)]
+        args += [*self.codec_args(job), "-y", str(job.output)]
 
         effective = duration
         if duration is not None:
@@ -296,8 +343,7 @@ class SubtitleExtract(Converter):
 
     def convert(self, job: Job) -> list[Path]:
         src = job.inputs[0]
-        info = subprocess.run([find_ffmpeg(), "-hide_banner", "-i", str(src)], capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", **popen_kwargs()).stderr
+        info = ffmpeg_info(src)
         count = len(re.findall(r"Stream #\d+:\d+.*?: Subtitle:", info))
         if count == 0:
             raise ConvertError(f"자막 트랙이 없는 동영상입니다: {src.name}")

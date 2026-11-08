@@ -57,8 +57,8 @@ def find_soffice() -> str | None:
 
 
 @functools.lru_cache(maxsize=None)
-def has_ms_office(app: str = "Word") -> bool:
-    """Windows 에 MS Office 프로그램(Word/Excel/PowerPoint)이 있고 pywin32 로 제어할 수 있는지."""
+def has_com_object(prog_id: str) -> bool:
+    """Windows 에 해당 COM 프로그램이 등록되어 있고 pywin32 로 제어할 수 있는지."""
     if not IS_WINDOWS:
         return False
     try:
@@ -66,7 +66,17 @@ def has_ms_office(app: str = "Word") -> bool:
 
         import win32com.client  # noqa: F401
 
-        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"{app}.Application\CLSID"))
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"{prog_id}\CLSID"))
         return True
     except Exception:
         return False
+
+
+def has_ms_office(app: str = "Word") -> bool:
+    """MS Office 프로그램(Word/Excel/PowerPoint)이 설치되어 있는지."""
+    return has_com_object(f"{app}.Application")
+
+
+def has_hancom() -> bool:
+    """한컴오피스 한글이 설치되어 있는지."""
+    return has_com_object("HWPFrame.HwpObject")

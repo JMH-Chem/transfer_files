@@ -71,3 +71,39 @@ def test_text_and_markdown_to_pdf(tmp_path):
     assert len(txt_pdf) > 1  # 여러 쪽으로 나뉨
     w, h = txt_pdf[0].get_size()
     assert round(w) == 420 and round(h) == 595  # A5
+
+
+def test_pdf_password_roundtrip(pdf_file, tmp_path):
+    [locked] = convert([pdf_file], "pdf", options={"new_password": "1234"}, output=tmp_path / "locked.pdf")
+    assert PdfReader(locked).is_encrypted
+    from fileconv.core import engine
+
+    results = engine.run(engine.plan([locked], "pdf"))
+    assert "암호가 걸린" in results[0].error
+    [unlocked] = convert([locked], "pdf", options={"password": "1234"})
+    assert not PdfReader(unlocked).is_encrypted and len(PdfReader(unlocked).pages) == 4
+
+
+def test_pdf_compress(tmp_path):
+    import img2pdf
+    import numpy as np
+
+    noisy = tmp_path / "scan.jpg"
+    Image.fromarray(np.random.default_rng(0).integers(0, 255, (1800, 1400, 3), dtype=np.uint8)).save(noisy, quality=95)
+    big = tmp_path / "big.pdf"
+    big.write_bytes(img2pdf.convert(str(noisy)))
+    [small] = convert([big], "pdf", using="pdf-compress", options={"image_quality": "40", "max_image_px": "800"})
+    assert small.stat().st_size < big.stat().st_size / 3
+    assert len(PdfReader(small).pages) == 1
+
+
+def test_hwp_to_pdf_reports_unavailable_without_hancom(tmp_path):
+    from fileconv.core import engine
+    from fileconv.core.tools import has_hancom
+
+    if has_hancom():
+        pytest.skip("한컴오피스가 설치된 PC")
+    f = tmp_path / "a.hwp"
+    f.write_bytes(b"x")
+    results = engine.run(engine.plan([f], "pdf"))
+    assert "한컴오피스" in results[0].error
