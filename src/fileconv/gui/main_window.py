@@ -527,14 +527,17 @@ class MainWindow(QMainWindow):
         target = saved.pop("__target__", None)
         if target in conv.outputs:
             self.target_combo.setCurrentText(target)
-        self.options_form.set_values(saved)
+        keep = {o.name for o in conv.options if o.should_remember}
+        self.options_form.set_values({k: v for k, v in saved.items() if k in keep})
 
     def _save_options(self) -> None:
         import json
 
         if self.converter is None:
             return
-        values = {k: v for k, v in self.options_form.values().items() if "password" not in k}  # 비밀번호는 저장 안 함
+        # 파일마다 다른 값(자르기 구간, 페이지, 회전, 비밀번호 등)은 기억하지 않는다 — 다음 파일에 몰래 적용되면 위험
+        keep = {o.name for o in self.converter.options if o.should_remember}
+        values = {k: v for k, v in self.options_form.values().items() if k in keep}
         values["__target__"] = self.target_combo.currentText()
         self.settings.setValue(f"options/{self.converter.name}", json.dumps(values, ensure_ascii=False))
 
@@ -551,6 +554,10 @@ class MainWindow(QMainWindow):
                 answer = QMessageBox.question(self, "종료", "변환 중입니다. 취소하고 종료할까요?")
                 if answer != QMessageBox.StandardButton.Yes:
                     event.ignore()
+                    return
+                if self.worker is None:  # 묻는 동안 변환이 끝났으면 그냥 닫는다
+                    self._save_settings()
+                    super().closeEvent(event)
                     return
                 # 스레드가 도는 중에 창을 없애면 프로그램이 강제 종료되므로, 취소를 요청하고 끝나면 닫는다
                 self._closing = True

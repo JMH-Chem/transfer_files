@@ -16,6 +16,8 @@ from ..core.registry import register
 from ..core.utils import detect_encoding, safe_sheet_name
 
 TEXT_EXTS = {"csv", "tsv", "txt", "json"}
+
+csv.field_size_limit(2**31 - 1)  # 기본 한도(128KB)보다 큰 칸도 읽기 (Windows 의 C long 한도에 맞춤)
 EXCEL_EXTS = {"xlsx", "xlsm"}
 
 DELIMITERS = {"쉼표": ",", "탭": "\t", "세미콜론": ";", "세로선": "|", "공백": r"\s+", "없음": None}
@@ -64,19 +66,20 @@ def split_rows(text: str, delim: str | None) -> list[list[str]]:
         return [line.split() for line in text.splitlines() if line.strip()]
     from io import StringIO
 
-    return [row for row in csv.reader(StringIO(text), delimiter=delim) if any(c.strip() for c in row)]
+    return [row for row in csv.reader(StringIO(text), delimiter=delim) if row]  # 완전히 빈 줄만 건너뜀
 
 
 def rows_to_frame(rows: list[list[str]], header: bool) -> pd.DataFrame:
     """줄마다 칸 수가 달라도 버리지 않는다: 모자라면 빈칸, 남으면 '열N' 열을 더 만든다.
-    줄 끝 쉼표처럼 전부 비어 있는 오른쪽 열은 지운다."""
+    칸 안의 값(앞뒤 공백 포함)은 그대로 둔다. 제목 줄이 있을 때, 제목도 내용도 전부 비어 있는
+    오른쪽 열(줄 끝 쉼표 때문에 생긴 열)만 지운다."""
     width = max((len(r) for r in rows), default=0)
-    rows = [[c.strip() for c in r] + [""] * (width - len(r)) for r in rows]
+    rows = [r + [""] * (width - len(r)) for r in rows]
     names: list[str] = []
     if header and rows:
         used: set[str] = set()
         for i, raw in enumerate(rows[0]):
-            name = raw.strip() or f"열{i + 1}"
+            name = raw if raw.strip() else f"열{i + 1}"
             candidate, n = name, 2
             while candidate in used:  # 같은 이름 열은 '이름_2' 처럼 구분
                 candidate, n = f"{name}_{n}", n + 1
@@ -87,7 +90,7 @@ def rows_to_frame(rows: list[list[str]], header: bool) -> pd.DataFrame:
     else:
         names = [f"열{i + 1}" for i in range(width)]
         body = rows
-        header_blank = [True] * width
+        header_blank = [False] * width  # 제목 줄이 없으면 열을 지우지 않는다
     keep = width
     while keep > 1 and header_blank[keep - 1] and all(not r[keep - 1].strip() for r in body):
         keep -= 1
@@ -221,7 +224,7 @@ class TextToExcel(Converter):
     priority = 10
     default_output = "xlsx"
     options = (DELIM_OPT, ENC_OPT, HEADER_OPT, NUMBERS_OPT,
-               Option("sheet_name", "str", "", "시트 이름", "비우면 파일 이름 사용 (합치기에서는 무시)"))
+               Option("sheet_name", "str", "", "시트 이름", "비우면 파일 이름 사용 (합치기에서는 무시)", remember=False))
 
     def convert(self, job: Job) -> list[Path]:
         sheets: list[tuple[str, pd.DataFrame]] = []
@@ -247,7 +250,8 @@ class ExcelToText(Converter):
     multi_output = True
     default_output = "csv"
     options = (
-        Option("sheet", "str", "", "시트", "시트 이름 또는 번호(1부터). 비우면 첫 시트, '전체' = 모든 시트를 각각 저장"),
+        Option("sheet", "str", "", "시트", "시트 이름 또는 번호(1부터). 비우면 첫 시트, '전체' = 모든 시트를 각각 저장",
+               remember=False),
         Option("out_encoding", "choice", "utf-8-sig", "저장 인코딩", "utf-8-sig = 엑셀에서 열어도 한글 안 깨짐",
                choices=("utf-8-sig", "utf-8", "cp949")),
     )

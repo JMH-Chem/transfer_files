@@ -83,7 +83,7 @@ def plan(
     출력 경로 규칙
     - 아무것도 안 줌       → 원본과 같은 폴더에 '원본이름.target'
     - output_dir           → 그 폴더 안에 '원본이름.target' (없으면 만듦)
-    - output 이 폴더       → (이미 있는 폴더, 끝이 / 또는 \\, 또는 입력이 여러 개라 파일 하나로 못 받을 때) 폴더로 취급
+    - output 이 폴더       → 이미 있는 폴더, 끝이 / 또는 \\, 또는 입력이 여러 개인데 확장자 없는 이름
     - output 이 파일 경로   → 그 파일 (입력이 하나이거나 merge 일 때만). 확장자가 없으면 붙여 줌
     - 같은 이름 파일이 있으면 '이름 (1).target' (overwrite=True 면 덮어씀, 단 원본은 절대 덮어쓰지 않음)
     - 이번에 만들 결과 파일끼리도 이름이 겹치지 않게 한다
@@ -104,7 +104,13 @@ def plan(
         text = str(output)
         output = Path(text).expanduser()
         single_output = merge or len(inputs) == 1
-        if output.is_dir() or text.endswith(("/", "\\")) or not single_output:
+        if output.is_dir() or text.endswith(("/", "\\")):
+            out_dir = output
+        elif not single_output:
+            if output.suffix or output.exists():
+                hint = " 하나로 합치려면 --merge 를 쓰세요." if convs[0].can_merge else ""
+                raise ConvertError(
+                    f"파일 여러 개를 각각 변환할 때는 -o 에 폴더를 지정하세요 (예: -o 결과/).{hint}")
             out_dir = output
         else:
             out_file = output if output.suffix else output.with_suffix(f".{suffix}")

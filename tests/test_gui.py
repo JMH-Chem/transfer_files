@@ -129,3 +129,24 @@ def test_gui_remembers_options_per_converter(qapp):
     w2.select_converter("images-to-pdf")
     assert w2.target_combo.currentText() == "pdf"
     w2.close()
+
+
+def test_gui_does_not_remember_one_off_options(qapp):
+    from fileconv.gui.main_window import MainWindow
+
+    w = MainWindow()
+    w.select_converter("video-convert")
+    _, start = w.options_form._widgets["start"]
+    _, end = w.options_form._widgets["end"]
+    _, quality = w.options_form._widgets["quality"]
+    start.setText("0:10")
+    end.setText("0:20")
+    quality.setCurrentText("높음")
+    w._save_settings()
+    w.close()
+    w2 = MainWindow()
+    w2.select_converter("video-convert")
+    values = w2.options_form.values()
+    assert "start" not in values and "end" not in values  # 자르기 구간은 다음 파일에 적용되면 안 됨
+    assert values["quality"] == "높음"  # 화질 같은 취향 설정은 기억
+    w2.close()

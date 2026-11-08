@@ -171,8 +171,8 @@ class ImageConvert(Converter):
         Option("quality", "int", 90, "품질", "JPG/WEBP 품질 (1~100)", min=1, max=100),
         Option("max_width", "int", 0, "최대 가로(px)", "0 = 줄이지 않음. 비율은 유지", min=0),
         Option("max_height", "int", 0, "최대 세로(px)", "0 = 줄이지 않음. 비율은 유지", min=0),
-        Option("rotate", "choice", "0", "회전", "시계 방향 회전 각도", choices=("0", "90", "180", "270")),
-        Option("flip", "choice", "안 함", "뒤집기", choices=("안 함", "좌우", "상하")),
+        Option("rotate", "choice", "0", "회전", "시계 방향 회전 각도", choices=("0", "90", "180", "270"), remember=False),
+        Option("flip", "choice", "안 함", "뒤집기", choices=("안 함", "좌우", "상하"), remember=False),
         Option("grayscale", "bool", False, "흑백으로"),
         Option("keep_exif", "bool", False, "촬영 정보 유지", "JPG/WEBP 저장 시 EXIF(촬영일, 위치 등) 유지"),
     )
@@ -195,6 +195,8 @@ class ImageConvert(Converter):
             img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
         if job.opt("grayscale"):
             img = img.convert("LA") if img.mode in ("RGBA", "LA", "PA", "P") and _has_alpha(img) else img.convert("L")
+            if fmt == "GIF" and img.mode == "LA":  # GIF 는 LA 를 바로 못 받아 투명 부분이 검게 됨
+                img = img.convert("RGBA")
         if fmt in ("JPEG", "BMP"):
             img = flatten(img.convert("RGBA") if img.mode in ("LA", "PA") else img)
         elif img.mode not in ("1", "L", "LA", "P", "RGB", "RGBA"):
@@ -212,12 +214,17 @@ class ImageConvert(Converter):
         if animated:  # 움직이는 GIF/WEBP 는 모든 프레임을 유지
             frames, durations = [], []
             for frame in ImageSequence.Iterator(img):
+                frame.load()  # WEBP 는 load() 해야 프레임별 duration 이 info 에 들어온다
                 durations.append(frame.info.get("duration", img.info.get("duration", 100)))
                 frames.append(self._transform(frame.convert("RGBA"), job, fmt))
                 job.cancel.check()
             first, rest = frames[0], frames[1:]
-            save_kwargs: dict = {"save_all": True, "append_images": rest, "duration": durations,
-                                 "loop": img.info.get("loop", 0)}
+            save_kwargs: dict = {"save_all": True, "append_images": rest, "duration": durations}
+            loop = img.info.get("loop")  # GIF 에 loop 정보가 없으면 '한 번만 재생'
+            if loop is not None:
+                save_kwargs["loop"] = loop
+            elif fmt == "WEBP":
+                save_kwargs["loop"] = 1  # WEBP 는 0 = 무한 반복, 1 = 한 번
             if fmt == "WEBP":
                 save_kwargs["quality"] = job.opt("quality", 90)
             else:

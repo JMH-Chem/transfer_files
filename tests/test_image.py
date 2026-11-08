@@ -97,3 +97,20 @@ def test_bracket_names_and_alias_targets(tmp_path):
     assert jpeg.suffix == ".jpeg" and Image.open(jpeg).format == "JPEG"
     [tif] = convert([real], "tif")
     assert Image.open(tif).format == "TIFF"
+
+
+def test_animation_timing_and_loop_preserved(tmp_path):
+    frames = [Image.new("RGB", (40, 40), c) for c in ("red", "green", "blue", "white")]
+    webp = tmp_path / "anim.webp"
+    frames[0].save(webp, save_all=True, append_images=frames[1:], duration=[100, 200, 300, 400], loop=0)
+    [gif] = convert([webp], "gif")
+    out = Image.open(gif)
+    durations = []
+    for i in range(out.n_frames):
+        out.seek(i)
+        durations.append(out.info["duration"])
+    assert durations == [100, 200, 300, 400]
+    once = tmp_path / "once.gif"
+    frames[0].save(once, save_all=True, append_images=frames[1:], duration=100)  # loop 없음 = 한 번만 재생
+    [small] = convert([once], "gif", options={"max_width": "20"})
+    assert "loop" not in Image.open(small).info

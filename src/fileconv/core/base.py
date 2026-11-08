@@ -32,6 +32,12 @@ class Option:
     choices: tuple[str, ...] = ()
     min: float | None = None
     max: float | None = None
+    remember: bool = True
+    """GUI 가 다음 실행 때 이 값을 기억할지. 자르기 구간·페이지 범위·회전처럼 파일마다 다른 값은 False."""
+
+    @property
+    def should_remember(self) -> bool:
+        return self.remember and self.type not in ("time", "pages") and "password" not in self.name
 
     @property
     def display(self) -> str:

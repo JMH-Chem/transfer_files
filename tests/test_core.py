@@ -197,9 +197,16 @@ def test_output_dir_forms(tmp_path):
     # 끝에 / 가 붙은 새 폴더
     tasks = engine.plan([a], "jpg", output=str(tmp_path / "newdir") + "/")
     assert tasks[0].output == tmp_path / "newdir" / "a.jpg"
-    # 입력이 여러 개면 점이 있는 이름도 폴더
-    tasks = engine.plan([a, b], "jpg", output=tmp_path / "my.out")
+    # 입력이 여러 개인데 점이 있는 이름은 파일인지 폴더인지 애매 → 오류로 안내, 끝에 / 를 붙이면 폴더
+    import pytest as _pytest
+
+    with _pytest.raises(ConvertError, match="폴더를 지정"):
+        engine.plan([a, b], "jpg", output=tmp_path / "my.out")
+    tasks = engine.plan([a, b], "jpg", output=str(tmp_path / "my.out") + "/")
     assert [t.output.parent.name for t in tasks] == ["my.out", "my.out"]
+    # 확장자 없는 이름은 폴더
+    tasks = engine.plan([a, b], "jpg", output=tmp_path / "결과")
+    assert [t.output.parent.name for t in tasks] == ["결과", "결과"]
     # GUI: 합치기 + 아직 없는 폴더
     tasks = engine.plan([a, b], "pdf", merge=True, output_dir=tmp_path / "없는폴더")
     assert tasks[0].output == tmp_path / "없는폴더" / "a_merged.pdf"
@@ -225,3 +232,14 @@ def test_cli_skips_unsupported_files_in_folder(tmp_path):
     result = CliRunner().invoke(app, ["convert", str(tmp_path), "-t", "jpg"])
     assert result.exit_code == 0, result.output
     assert "건너뜀" in result.output and (tmp_path / "1.jpg").exists()
+
+
+def test_output_file_with_many_inputs_is_clear_error(tmp_path):
+    a = _png(tmp_path / "a.png")
+    b = _png(tmp_path / "b.png")
+    import pytest as _pytest
+
+    with _pytest.raises(ConvertError, match="--merge"):
+        engine.plan([a, b], "pdf", output=tmp_path / "앨범.pdf")
+    tasks = engine.plan([a, b], "pdf", output=tmp_path / "앨범.pdf", merge=True)
+    assert len(tasks) == 1 and tasks[0].output.name == "앨범.pdf"

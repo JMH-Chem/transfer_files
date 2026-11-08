@@ -107,8 +107,8 @@ class ToAudio(Converter):
         Option("sample_rate", "choice", "원본", "샘플레이트", "Hz 단위. 보통은 원본 유지",
                choices=("원본", "22050", "44100", "48000")),
         Option("channels", "choice", "원본", "채널", "모노/스테레오", choices=("원본", "mono", "stereo")),
-        Option("start", "time", None, "시작 시간", "이 시간부터 (예: 1:30, 90, 00:01:30)"),
-        Option("end", "time", None, "끝 시간", "이 시간까지 (예: 3:00)"),
+        Option("start", "time", None, "시작 시간", "이 시간부터 (예: 1:30, 90, 00:01:30)", remember=False),
+        Option("end", "time", None, "끝 시간", "이 시간까지 (예: 3:00)", remember=False),
         Option("volume", "float", 1.0, "볼륨 배율", "1.0 = 그대로, 2.0 = 두 배", min=0.0, max=10.0),
     )
 
@@ -214,8 +214,8 @@ QUALITY = {  # (x264 CRF, VP9 CRF, mpeg4 qscale)
 }
 RESOLUTIONS = {"원본": None, "2160p": 2160, "1440p": 1440, "1080p": 1080, "720p": 720, "480p": 480, "360p": 360, "240p": 240}
 TRIM_OPTS = (
-    Option("start", "time", None, "시작 시간", "이 시간부터 (예: 1:30)"),
-    Option("end", "time", None, "끝 시간", "이 시간까지 (예: 3:00)"),
+    Option("start", "time", None, "시작 시간", "이 시간부터 (예: 1:30)", remember=False),
+    Option("end", "time", None, "끝 시간", "이 시간까지 (예: 3:00)", remember=False),
 )
 
 
@@ -337,7 +337,7 @@ class SubtitleExtract(Converter):
     inputs = frozenset(VIDEO_EXTS)
     outputs = frozenset({"srt", "ass", "vtt"})
     default_output = "srt"
-    options = (Option("track", "int", 1, "자막 트랙 번호", "자막이 여러 개면 몇 번째 것인지 (1부터)", min=1),)
+    options = (Option("track", "int", 1, "자막 트랙 번호", "자막이 여러 개면 몇 번째 것인지 (1부터)", min=1, remember=False),)
 
     def is_available(self) -> tuple[bool, str]:
         return ToAudio.is_available(self)  # type: ignore[arg-type]

@@ -72,7 +72,7 @@ class PdfTools(Converter):
     priority = 10
     options = (
         PAGES_OPT,
-        Option("rotate", "choice", "0", "회전", "시계 방향 회전 각도", choices=("0", "90", "180", "270")),
+        Option("rotate", "choice", "0", "회전", "시계 방향 회전 각도", choices=("0", "90", "180", "270"), remember=False),
         PASSWORD_OPT,
         Option("new_password", "str", "", "새 비밀번호 걸기", "결과 PDF 에 열기 암호를 겁니다 (비우면 암호 없음)"),
     )
@@ -484,7 +484,7 @@ class MarkdownToHtml(Converter):
     inputs = frozenset({"md", "txt"})
     outputs = frozenset({"html"})
     options = (
-        Option("title", "str", "", "제목", "비우면 첫 번째 제목 또는 파일 이름"),
+        Option("title", "str", "", "제목", "비우면 첫 번째 제목 또는 파일 이름", remember=False),
         Option("style", "bool", True, "기본 스타일 적용", "끄면 CSS 없이 순수 HTML"),
     )
 

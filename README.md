@@ -143,7 +143,7 @@ fconv convert 보고서.pdf -t png -O dpi=200 -O pages=1-3
 ```
 
 ```bash
-fconv convert 동영상폴더 -t mp4 -O resolution=720p -O quality=보통 -o 압축본\
+fconv convert 동영상폴더 -t mp4 -O resolution=720p -O quality=보통 -o 압축본/
 ```
 
 | 옵션 | 뜻 |

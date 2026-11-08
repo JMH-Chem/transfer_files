@@ -116,7 +116,7 @@ def info_cmd(name: str = typer.Argument(..., help="변환기 이름 (fconv list 
 def convert_cmd(
     inputs: List[str] = typer.Argument(..., help="변환할 파일들 (*.jpg 같은 와일드카드, 폴더도 가능)"),
     to: str = typer.Option(..., "--to", "-t", help="출력 형식 (확장자). 예: mp3, pdf, xlsx"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="출력 파일 또는 폴더 (기본: 원본과 같은 폴더). 폴더는 끝에 \\ 또는 / 를 붙이면 확실"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="출력 파일 또는 폴더 (기본: 원본과 같은 폴더). 폴더는 끝에 / 를 붙이면 확실 (예: -o \"D:/새 폴더/\")"),
     merge: bool = typer.Option(False, "--merge", "-m", help="여러 파일을 하나로 합치기 (이미지→PDF, PDF 합치기, CSV→엑셀 시트)"),
     opts: List[str] = typer.Option([], "--opt", "-O", help="변환 옵션 '이름=값' (여러 번 가능). fconv info 로 확인"),
     using: Optional[str] = typer.Option(None, "--using", "-u", help="변환기를 직접 지정 (예: pdf-split)"),

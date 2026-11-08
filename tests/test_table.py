@@ -81,7 +81,7 @@ def test_ragged_rows_are_kept(tmp_path):
     rows = [[c.value for c in r] for r in openpyxl.load_workbook(x).active.iter_rows()]
     assert rows[0] == ["이름", "나이", "도시", "열4", "열5"]
     assert rows[1] == ["홍길동", 30, "서울", None, None]  # 줄 끝 쉼표 때문에 이름이 사라지면 안 됨
-    assert rows[2] == ["김철수", 25, "부산", "강서구", "추가"]  # 칸이 많은 줄도 버리지 않음
+    assert rows[2] == ["김철수", 25, "부산", " 강서구", "추가"]  # 칸이 많은 줄도 버리지 않음 (값은 그대로)
 
 
 def test_trailing_comma_column_removed(tmp_path):
@@ -98,3 +98,22 @@ def test_formula_like_text_stays_text(tmp_path):
     ws = openpyxl.load_workbook(x).active
     assert ws["A2"].value == "=== 중요 ===" and ws["A2"].data_type == "s"
     assert ws["B2"].data_type == "s"
+
+
+def test_table_convert_is_lossless(tmp_path):
+    f = tmp_path / "원본.csv"
+    f.write_text('코드,메모\n" 0012 ","  들여쓰기"\n,\n3,끝\n', encoding="cp949")
+    [out] = convert([f], "csv", options={"out_encoding": "utf-8"})
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert lines[1] == " 0012 ,  들여쓰기"  # 앞뒤 공백 유지
+    assert lines[2] == ","  # 빈 칸만 있는 줄도 유지
+    assert lines[3] == "3,끝"
+
+
+def test_huge_cell(tmp_path):
+    f = tmp_path / "big.csv"
+    f.write_text("a,b\n" + "x" * 200_000 + ",1\n", encoding="utf-8")
+    [js] = convert([f], "json")
+    assert len(json.loads(js.read_text(encoding="utf-8"))[0]["a"]) == 200_000
+    [x] = convert([f], "xlsx")  # 엑셀 한 칸의 최대 글자 수(32767)까지만 들어가지만 변환은 성공
+    assert len(openpyxl.load_workbook(x).active["A2"].value) == 32767
