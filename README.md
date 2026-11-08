@@ -38,7 +38,17 @@
 
 ---
 
-## 설치 (Windows)
+## 가장 쉬운 방법 — 실행 파일만 내려받기 (Python 설치 불필요)
+
+1. GitHub 저장소 페이지 → **Actions** 탭 → 맨 위(가장 최근)의 초록색 ✓ **CI** 실행을 누릅니다.
+2. 아래쪽 **Artifacts** 에서 **FileConverter-windows** 를 내려받아 압축을 풉니다.
+3. 폴더 안의 **FileConverter.exe** 를 실행합니다. (명령줄은 같은 폴더의 `fconv.exe`)
+
+> 처음 실행할 때 "Windows의 PC 보호" 파란 창이 뜨면 **추가 정보 → 실행** 을 누르세요.
+> 코드 서명을 하지 않은 프로그램이라 뜨는 경고입니다.
+> Actions 의 파일은 90일 뒤 지워지므로, 오래 보관하려면 압축 파일을 따로 저장해 두세요.
+
+## 설치 (Windows, Python 으로 직접 실행)
 
 1. **Python 3.11 이상** 설치: <https://www.python.org/downloads/>
    설치 첫 화면에서 **"Add python.exe to PATH"** 를 꼭 체크하세요.
