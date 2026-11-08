@@ -21,6 +21,7 @@ app = typer.Typer(
     help="만능 파일 변환기 — 동영상/음성, 이미지/PDF, 텍스트/엑셀, 문서 변환",
     no_args_is_help=True,
     add_completion=False,
+    context_settings={"help_option_names": ["-h", "--help"]},
     rich_markup_mode="rich",
 )
 console = Console()
@@ -195,7 +196,7 @@ def convert_cmd(
 
 @app.command("doctor")
 def doctor_cmd() -> None:
-    """설치 상태 점검: 외부 프로그램(ffmpeg, LibreOffice, MS Office, 한컴오피스)과 사용 가능한 변환."""
+    """설치 상태 점검 (ffmpeg·LibreOffice·MS Office·한컴오피스, 사용 가능한 변환)."""
     import platform
     import subprocess
 
