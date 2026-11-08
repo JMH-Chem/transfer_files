@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fileconv"
+version = "0.1.0"
+description = "만능 파일 변환기 - 동영상/음성, 이미지/PDF, 텍스트/엑셀, 문서 변환 (CLI + GUI)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13",
+    "imageio-ffmpeg>=0.5",
+    "Pillow>=10",
+    "img2pdf>=0.5",
+    "pillow-heif>=0.16",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "charset-normalizer>=3",
+    "pypdf>=4",
+    "pypdfium2>=4",
+    "markdown>=3.5",
+    "python-docx>=1.1",
+    "PySide6-Essentials>=6.6",
+    "pywin32>=306; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyinstaller>=6"]
+
+[project.scripts]
+fconv = "fileconv.cli.main:main"
+
+[project.gui-scripts]
+fconv-gui = "fileconv.gui.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fileconv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

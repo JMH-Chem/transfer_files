@@ -1,0 +1,72 @@
+"""외부 프로그램(ffmpeg, MS Word, LibreOffice) 찾기와 실행 도우미."""
+
+from __future__ import annotations
+
+import functools
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+IS_WINDOWS = sys.platform == "win32"
+
+# GUI(.exe)에서 실행할 때 검은 콘솔 창이 뜨지 않도록
+CREATE_NO_WINDOW = 0x08000000 if IS_WINDOWS else 0
+
+
+def popen_kwargs() -> dict:
+    return {"creationflags": CREATE_NO_WINDOW} if IS_WINDOWS else {}
+
+
+@functools.lru_cache(maxsize=None)
+def find_ffmpeg() -> str | None:
+    """ffmpeg 실행 파일 경로. 환경변수 FCONV_FFMPEG → imageio-ffmpeg 내장 → PATH 순서."""
+    env = os.environ.get("FCONV_FFMPEG")
+    if env and Path(env).is_file():
+        return env
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return shutil.which("ffmpeg")
+
+
+@functools.lru_cache(maxsize=None)
+def find_soffice() -> str | None:
+    """LibreOffice(soffice) 경로. 환경변수 FCONV_SOFFICE → PATH → Windows 기본 설치 위치."""
+    env = os.environ.get("FCONV_SOFFICE")
+    if env and Path(env).is_file():
+        return env
+    for name in ("soffice", "libreoffice"):
+        found = shutil.which(name)
+        if found:
+            return found
+    if IS_WINDOWS:
+        for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+            if base:
+                candidate = Path(base) / "LibreOffice" / "program" / "soffice.exe"
+                if candidate.is_file():
+                    return str(candidate)
+    elif sys.platform == "darwin":
+        candidate = Path("/Applications/LibreOffice.app/Contents/MacOS/soffice")
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+@functools.lru_cache(maxsize=None)
+def has_ms_office(app: str = "Word") -> bool:
+    """Windows 에 MS Office 프로그램(Word/Excel/PowerPoint)이 있고 pywin32 로 제어할 수 있는지."""
+    if not IS_WINDOWS:
+        return False
+    try:
+        import winreg
+
+        import win32com.client  # noqa: F401
+
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"{app}.Application\CLSID"))
+        return True
+    except Exception:
+        return False
