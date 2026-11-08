@@ -10,12 +10,12 @@ QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 
 @pytest.fixture(scope="module")
-def qapp():
+def qapp(tmp_path_factory):
+    # 실제 사용자 설정(Windows 레지스트리 등) 대신 임시 ini 파일을 쓰게 한다
+    os.environ["FCONV_SETTINGS"] = str(tmp_path_factory.mktemp("settings") / "fileconv.ini")
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    from PySide6.QtCore import QSettings
-
-    QSettings("fileconv", "fileconv").clear()
-    return app
+    yield app
+    os.environ.pop("FCONV_SETTINGS", None)
 
 
 def wait(app, window, timeout=30):
@@ -110,3 +110,22 @@ def test_gui_close_during_conversion_waits_for_worker(qapp, images, monkeypatch)
     wait(qapp, w)
     qapp.processEvents()
     assert not w.isVisible()
+
+
+def test_gui_remembers_options_per_converter(qapp):
+    from fileconv.gui.main_window import MainWindow
+
+    w = MainWindow()
+    w.select_converter("to-audio")
+    w.target_combo.setCurrentText("flac")
+    _, combo = w.options_form._widgets["bitrate"]
+    combo.setCurrentText("320k")
+    w._save_settings()
+    w.close()
+    w2 = MainWindow()
+    w2.select_converter("to-audio")
+    assert w2.target_combo.currentText() == "flac"
+    assert w2.options_form.values()["bitrate"] == "320k"
+    w2.select_converter("images-to-pdf")
+    assert w2.target_combo.currentText() == "pdf"
+    w2.close()

@@ -76,6 +76,29 @@ class OptionsForm(QWidget):
         line.setClearButtonEnabled(True)
         return line
 
+    def set_values(self, values: dict[str, Any]) -> None:
+        """저장해 둔 값을 폼에 채운다. 맞지 않는 값(선택지에 없음 등)은 무시하고 기본값 유지."""
+        for name, value in values.items():
+            if name not in self._widgets:
+                continue
+            opt, widget = self._widgets[name]
+            try:
+                parsed = opt.parse(value)
+            except Exception:
+                continue
+            if parsed is None:
+                continue
+            if isinstance(widget, QCheckBox):
+                widget.setChecked(bool(parsed))
+            elif isinstance(widget, QComboBox) and str(parsed) in opt.choices:
+                widget.setCurrentText(str(parsed))
+            elif isinstance(widget, QSpinBox):
+                widget.setValue(int(parsed))
+            elif isinstance(widget, QDoubleSpinBox):
+                widget.setValue(float(parsed))
+            elif isinstance(widget, QLineEdit) and opt.name != "password" and "password" not in opt.name:
+                widget.setText(str(value))
+
     def values(self) -> dict[str, Any]:
         """현재 입력값 (빈 칸은 빼서 기본값이 쓰이도록)."""
         result: dict[str, Any] = {}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QUrl
@@ -94,7 +95,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"파일 변환기 fileconv {__version__}")
         self.resize(1100, 720)
-        self.settings = QSettings("fileconv", "fileconv")
+        # FCONV_SETTINGS 가 있으면 그 ini 파일에 저장 (테스트가 실제 사용자 설정을 건드리지 않게)
+        ini = os.environ.get("FCONV_SETTINGS")
+        self.settings = QSettings(ini, QSettings.Format.IniFormat) if ini else QSettings("fileconv", "fileconv")
         self.converter: Converter | None = None
         self.worker: ConvertWorker | None = None
         self.last_output_dir: Path | None = None
@@ -296,6 +299,7 @@ class MainWindow(QMainWindow):
         self.merge_check.setChecked(conv.can_merge and conv.merge_default)
         self.merge_name.setEnabled(self.merge_check.isChecked())
         self.options_form.set_converter(conv)
+        self._restore_options(conv)
         self._refresh_file_marks()
 
     # ------------------------------------------------------------ 파일 목록
@@ -511,7 +515,31 @@ class MainWindow(QMainWindow):
         if self.settings.value("use_custom_dir", "false") == "true":
             self.custom_dir_radio.setChecked(True)
 
+    def _restore_options(self, conv: Converter) -> None:
+        """이 변환에서 지난번에 쓴 옵션·출력 형식을 되살린다."""
+        import json
+
+        raw = self.settings.value(f"options/{conv.name}", "")
+        try:
+            saved = json.loads(raw) if raw else {}
+        except (TypeError, ValueError):
+            saved = {}
+        target = saved.pop("__target__", None)
+        if target in conv.outputs:
+            self.target_combo.setCurrentText(target)
+        self.options_form.set_values(saved)
+
+    def _save_options(self) -> None:
+        import json
+
+        if self.converter is None:
+            return
+        values = {k: v for k, v in self.options_form.values().items() if "password" not in k}  # 비밀번호는 저장 안 함
+        values["__target__"] = self.target_combo.currentText()
+        self.settings.setValue(f"options/{self.converter.name}", json.dumps(values, ensure_ascii=False))
+
     def _save_settings(self) -> None:
+        self._save_options()
         if self.converter:
             self.settings.setValue("converter", self.converter.name)
         self.settings.setValue("output_dir", self.out_dir_edit.text())

@@ -6,7 +6,7 @@
 - 변환 엔진(core), 명령줄 `fconv`, 창 프로그램(GUI), 변환기 20종 — 사용법은 README.md
 - 1단계 기능 4종 전부 + 2단계 일부 (동영상 변환/압축, GIF, 자막 추출, 텍스트·Markdown→PDF, PDF 용량 줄이기·암호,
   음성 이어 붙이기, 이미지 회전·흑백, 한글 HWP/HWPX→텍스트, 한컴오피스가 있으면 HWP→PDF)
-- 테스트 70여 개 (GitHub Actions 에서 Windows·Linux 자동 실행), Windows .exe 자동 빌드(Actions 의 FileConverter-windows)
+- 테스트 약 90개 (GitHub Actions 에서 Windows·Linux 자동 실행), 별도 코드 검토로 찾은 버그 12건 수정, Windows .exe 자동 빌드(Actions 의 FileConverter-windows)
 - 탐색기 "보내기" 메뉴 등록 `fconv sendto`
 
 **사용자 PC(Windows)에서 직접 확인이 필요한 것** — 이 환경에는 없어서 시험하지 못함
