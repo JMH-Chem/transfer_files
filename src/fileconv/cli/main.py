@@ -195,6 +195,44 @@ def gui_cmd() -> None:
     gui_main()
 
 
+@app.command("sendto")
+def sendto_cmd(remove: bool = typer.Option(False, "--remove", help="'보내기' 메뉴에서 제거")) -> None:
+    """Windows 탐색기 오른쪽 클릭 '보내기' 메뉴에 파일 변환기를 추가합니다."""
+    import os
+
+    from ..core.tools import IS_WINDOWS
+
+    if not IS_WINDOWS:
+        err_console.print("[red]이 기능은 Windows 에서만 쓸 수 있습니다[/red]")
+        raise typer.Exit(1)
+    sendto = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "SendTo"
+    link = sendto / "파일 변환기.lnk"
+    if remove:
+        if link.exists():
+            link.unlink()
+        console.print("'보내기' 메뉴에서 제거했습니다")
+        return
+    if getattr(sys, "frozen", False):  # PyInstaller 로 만든 exe 로 실행 중
+        target, arguments = Path(sys.executable).with_name("FileConverter.exe"), ""
+    else:
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        target, arguments = (pythonw if pythonw.exists() else Path(sys.executable)), "-m fileconv.gui.app"
+    try:
+        import win32com.client
+
+        shell = win32com.client.Dispatch("WScript.Shell")
+        shortcut = shell.CreateShortcut(str(link))
+        shortcut.TargetPath = str(target)
+        shortcut.Arguments = arguments
+        shortcut.WorkingDirectory = str(Path.home())
+        shortcut.Description = "fileconv 파일 변환기"
+        shortcut.save()
+    except Exception as exc:
+        err_console.print(f"[red]바로가기를 만들 수 없습니다: {exc}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]완료![/green] 탐색기에서 파일 선택 → 오른쪽 클릭 → 보내기 → '파일 변환기'\n[dim]{link}[/dim]")
+
+
 def _parse_opts(items: list[str]) -> dict[str, str]:
     options: dict[str, str] = {}
     for item in items:

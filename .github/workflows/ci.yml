@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 테스트 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Linux 에서 Qt 실행에 필요한 라이브러리와 한글 글꼴
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 fonts-nanum
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+
+  build-windows:
+    name: Windows 실행 파일 만들기
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: PyInstaller
+        working-directory: packaging
+        run: pyinstaller fileconv.spec --noconfirm --clean --distpath ../dist --workpath ../build
+      - name: 실행 파일 동작 확인
+        run: dist\FileConverter\fconv.exe list
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FileConverter-windows
+          path: dist/FileConverter
