@@ -80,3 +80,33 @@ def test_gui_start_disabled_for_unavailable_converter(qapp, monkeypatch):
     w.select_converter("images-to-pdf")
     assert w.start_btn.isEnabled()
     w.close()
+
+
+def test_gui_close_during_conversion_waits_for_worker(qapp, images, monkeypatch):
+    """변환 중에 창을 닫아도 강제 종료되지 않고, 작업이 끝난 뒤 닫힌다."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from fileconv.core.registry import get
+    from fileconv.gui.main_window import MainWindow
+
+    conv = get("images-to-pdf")
+    original = type(conv).convert
+
+    def slow(self, job):
+        for _ in range(30):
+            time.sleep(0.02)
+            job.progress(0.1)  # 취소 요청을 확인하는 지점
+        return original(self, job)
+
+    monkeypatch.setattr(type(conv), "convert", slow)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    w = MainWindow()
+    w.show()
+    w.add_paths([str(images[0])])
+    w.start_conversion()
+    assert w.worker is not None
+    w.close()
+    assert w.isVisible()  # 아직 작업 중이라 바로 닫히지 않음
+    wait(qapp, w)
+    qapp.processEvents()
+    assert not w.isVisible()

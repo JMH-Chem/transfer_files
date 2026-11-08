@@ -196,6 +196,10 @@ def _hancom_to_pdf(src: Path, dst: Path) -> None:
                 hwp.Quit()
             except Exception:
                 pass
+        hwp = None  # COM 객체를 놓은 뒤에 CoUninitialize
+        import gc
+
+        gc.collect()
         pythoncom.CoUninitialize()
 
 

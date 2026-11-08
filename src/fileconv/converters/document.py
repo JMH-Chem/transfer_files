@@ -120,6 +120,8 @@ class PdfSplit(Converter):
 
         src = job.inputs[0]
         reader = open_pdf(src, job.opt("password", ""))
+        if len(reader.pages) == 0:
+            raise ConvertError(f"페이지가 없는 PDF 입니다: {src.name}")
         indices = parse_pages(job.opt("pages"), len(reader.pages))
         every = job.opt("every", 1)
         chunks = [indices[i:i + every] for i in range(0, len(indices), every)]
@@ -302,48 +304,68 @@ def _office_com_to_pdf(src: Path, dst: Path) -> None:
 
     ext = src.suffix.lower().lstrip(".")
     pythoncom.CoInitialize()  # GUI 백그라운드 스레드에서도 동작하도록
-    app = None
+    app = doc = None
+    started_by_us = True
     try:
         if ext in WORD_EXTS:
-            app = win32com.client.DispatchEx("Word.Application")
+            app = win32com.client.DispatchEx("Word.Application")  # 새 Word 를 따로 띄움 (사용자 문서와 무관)
             app.Visible = False
             app.DisplayAlerts = 0
             doc = app.Documents.Open(str(src), ReadOnly=True, AddToRecentFiles=False, ConfirmConversions=False)
-            try:
-                doc.ExportAsFixedFormat(str(dst), 17)  # wdExportFormatPDF
-            finally:
-                doc.Close(0)
+            doc.ExportAsFixedFormat(str(dst), 17)  # wdExportFormatPDF
+            doc.Close(0)
         elif ext in EXCEL_EXTS:
             app = win32com.client.DispatchEx("Excel.Application")
             app.Visible = False
             app.DisplayAlerts = False
-            wb = app.Workbooks.Open(str(src), ReadOnly=True)
-            try:
-                wb.ExportAsFixedFormat(0, str(dst))  # xlTypePDF
-            finally:
-                wb.Close(False)
+            doc = app.Workbooks.Open(str(src), ReadOnly=True)
+            doc.ExportAsFixedFormat(0, str(dst))  # xlTypePDF
+            doc.Close(False)
         else:
-            app = win32com.client.DispatchEx("PowerPoint.Application")
-            pres = app.Presentations.Open(str(src), True, False, False)  # ReadOnly, Untitled, WithWindow
+            # PowerPoint 는 프로그램이 하나만 떠서, 사용자가 이미 열어 둔 PowerPoint 에 붙는다 → 그때는 끄면 안 됨
             try:
-                pres.SaveAs(str(dst), 32)  # ppSaveAsPDF
-            finally:
-                pres.Close()
+                win32com.client.GetActiveObject("PowerPoint.Application")
+                started_by_us = False
+            except Exception:
+                started_by_us = True
+            app = win32com.client.DispatchEx("PowerPoint.Application")
+            doc = app.Presentations.Open(str(src), True, False, False)  # ReadOnly, Untitled, WithWindow
+            doc.SaveAs(str(dst), 32)  # ppSaveAsPDF
+            doc.Close()
+        doc = None
     except Exception as exc:
         raise ConvertError(f"MS Office 로 PDF 변환 실패: {exc}") from exc
     finally:
-        if app is not None:
+        if doc is not None:
+            try:
+                doc.Close(0) if ext in WORD_EXTS else doc.Close(False) if ext in EXCEL_EXTS else doc.Close()
+            except Exception:
+                pass
+        if app is not None and started_by_us:
             try:
                 app.Quit()
             except Exception:
                 pass
+        doc = app = None  # COM 객체를 모두 놓은 뒤에 CoUninitialize 해야 스레드가 죽지 않는다
+        import gc
+
+        gc.collect()
         pythoncom.CoUninitialize()
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """프로세스와 그 자식까지 종료 (Windows 의 soffice.exe 는 soffice.bin 을 따로 띄우기 때문)."""
+    if IS_WINDOWS_:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, **popen_kwargs())
+    proc.kill()
+    proc.wait()
 
 
 def _libreoffice_convert(src: Path, dst: Path, fmt: str, job: Job, timeout: float = 600) -> None:
     """LibreOffice 로 변환. 이미 LibreOffice 가 열려 있어도 충돌하지 않도록 임시 프로필을 쓴다."""
     soffice = find_soffice()
-    with tempfile.TemporaryDirectory(prefix="fconv-lo-") as tmp:
+    # 강제로 끈 LibreOffice 가 임시 폴더를 잠깐 잡고 있어도 정리 오류가 '취소' 결과를 덮지 않게
+    with tempfile.TemporaryDirectory(prefix="fconv-lo-", ignore_cleanup_errors=True) as tmp:
         tmp_path = Path(tmp)
         out_dir = tmp_path / "out"
         out_dir.mkdir()
@@ -364,8 +386,7 @@ def _libreoffice_convert(src: Path, dst: Path, fmt: str, job: Job, timeout: floa
                 job.progress(min(0.9, elapsed / 30))  # 실제 진행률을 알 수 없어 시간 기준으로 표시
                 time.sleep(0.2)
         except BaseException:
-            proc.kill()
-            proc.wait()
+            _kill_tree(proc)
             raise
         output = proc.stdout.read().decode("utf-8", "replace") if proc.stdout else ""
         produced = list(out_dir.glob("*"))

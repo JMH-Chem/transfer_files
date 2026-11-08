@@ -152,3 +152,76 @@ def test_excel_single_sheet_does_not_overwrite(tmp_path):
     results = engine.run(engine.plan([book], "csv"))
     assert results[0].outputs[0].name == "b (1).csv"
     assert existing.read_text(encoding="utf-8") == "keep"
+
+
+def _png(path, color="red"):
+    from PIL import Image
+
+    Image.new("RGB", (20, 20), color).save(path)
+    return path
+
+
+def _pdf(path):
+    import img2pdf
+
+    src = _png(path.with_suffix(".src.png"))
+    path.write_bytes(img2pdf.convert(str(src)))
+    src.unlink()
+    return path
+
+
+def test_multi_output_does_not_clobber_other_outputs(tmp_path):
+    """a.pdf → a.png (PDF→이미지) 와 a.jpg → a.png 가 같은 이름을 쓰지 않는다."""
+    from PIL import Image
+
+    pdf = _pdf(tmp_path / "a.pdf")
+    jpg = tmp_path / "a.jpg"
+    Image.new("RGB", (20, 20), "blue").save(jpg)
+    results = engine.run(engine.plan([pdf, jpg], "png"))
+    outs = [o for r in results for o in r.outputs]
+    assert all(r.ok for r in results) and len(set(outs)) == 2
+
+
+def test_overwrite_never_destroys_input_with_multi_output(tmp_path):
+    pdf = _pdf(tmp_path / "a.pdf")
+    original = _png(tmp_path / "a.png", "green")
+    before = original.read_bytes()
+    results = engine.run(engine.plan([pdf, original], "png", overwrite=True))
+    assert all(r.ok for r in results)
+    assert original.read_bytes() == before
+
+
+def test_output_dir_forms(tmp_path):
+    a = _png(tmp_path / "a.png")
+    b = _png(tmp_path / "b.png")
+    # 끝에 / 가 붙은 새 폴더
+    tasks = engine.plan([a], "jpg", output=str(tmp_path / "newdir") + "/")
+    assert tasks[0].output == tmp_path / "newdir" / "a.jpg"
+    # 입력이 여러 개면 점이 있는 이름도 폴더
+    tasks = engine.plan([a, b], "jpg", output=tmp_path / "my.out")
+    assert [t.output.parent.name for t in tasks] == ["my.out", "my.out"]
+    # GUI: 합치기 + 아직 없는 폴더
+    tasks = engine.plan([a, b], "pdf", merge=True, output_dir=tmp_path / "없는폴더")
+    assert tasks[0].output == tmp_path / "없는폴더" / "a_merged.pdf"
+
+
+def test_folder_input_skips_junk_files(tmp_path):
+    folder = tmp_path / "사진"
+    folder.mkdir()
+    _png(folder / "1.png")
+    (folder / "desktop.ini").write_text("[.ShellClassInfo]", encoding="utf-8")
+    (folder / "Thumbs.db").write_bytes(b"x")
+    (folder / "~$문서.docx").write_bytes(b"x")
+    assert [p.name for p in expand_inputs([str(folder)])] == ["1.png"]
+
+
+def test_cli_skips_unsupported_files_in_folder(tmp_path):
+    from typer.testing import CliRunner
+
+    from fileconv.cli.main import app
+
+    _png(tmp_path / "1.png")
+    (tmp_path / "메모.txt").write_text("hi", encoding="utf-8")
+    result = CliRunner().invoke(app, ["convert", str(tmp_path), "-t", "jpg"])
+    assert result.exit_code == 0, result.output
+    assert "건너뜀" in result.output and (tmp_path / "1.jpg").exists()

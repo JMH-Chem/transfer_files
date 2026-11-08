@@ -212,7 +212,7 @@ QUALITY = {  # (x264 CRF, VP9 CRF, mpeg4 qscale)
     "보통": (23, 33, 5),
     "낮음(작은 파일)": (28, 40, 9),
 }
-RESOLUTIONS = {"원본": None, "2160p": 2160, "1440p": 1440, "1080p": 1080, "720p": 720, "480p": 480, "360p": 360}
+RESOLUTIONS = {"원본": None, "2160p": 2160, "1440p": 1440, "1080p": 1080, "720p": 720, "480p": 480, "360p": 360, "240p": 240}
 TRIM_OPTS = (
     Option("start", "time", None, "시작 시간", "이 시간부터 (예: 1:30)"),
     Option("end", "time", None, "끝 시간", "이 시간까지 (예: 3:00)"),
@@ -264,8 +264,8 @@ class VideoConvert(Converter):
         crf_x264, crf_vp9, q_mpeg4 = QUALITY[job.opt("quality", "보통")]
         filters: list[str] = []
         height = RESOLUTIONS[job.opt("resolution", "원본")]
-        if height:
-            filters.append(f"scale=-2:'min({height},ih)':flags=lanczos")
+        if height:  # '720p' = 짧은 변이 720 (세로 영상은 가로를 720 으로)
+            filters.append(f"scale='if(gte(iw,ih),-2,min({height},iw))':'if(gte(iw,ih),min({height},ih),-2)':flags=lanczos")
         filters.append("scale=trunc(iw/2)*2:trunc(ih/2)*2")  # 대부분의 코덱은 짝수 크기만 허용
         if job.opt("fps", "원본") != "원본":
             filters.append(f"fps={job.opt('fps')}")

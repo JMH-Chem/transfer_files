@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
         self.converter: Converter | None = None
         self.worker: ConvertWorker | None = None
         self.last_output_dir: Path | None = None
+        self._closing = False
         self.setAcceptDrops(True)
         self._build_ui()
         self.file_list.model().rowsRemoved.connect(lambda *_: self._update_count())
@@ -399,16 +400,14 @@ class MainWindow(QMainWindow):
         if self.custom_dir_radio.isChecked() and out_dir is None:
             raise ConvertError("저장할 폴더를 지정하세요")
         merge = conv.can_merge and self.merge_check.isChecked() and len(files) > 1
-        output: Path | None = out_dir
+        output: Path | None = None
         if merge and self.merge_name.text().strip():
             name = self.merge_name.text().strip()
             if not name.lower().endswith(f".{target}"):
                 name += f".{target}"
             output = (out_dir or files[0].parent) / name
-        elif out_dir is not None and len(files) == 1:
-            output = out_dir / f"{files[0].stem}.{target}"
         return engine.plan(
-            files, target, output=output, merge=merge, using=conv.name,
+            files, target, output=output, output_dir=out_dir, merge=merge, using=conv.name,
             options=self.options_form.values(), overwrite=self.overwrite_check.isChecked(),
         )
 
@@ -471,6 +470,9 @@ class MainWindow(QMainWindow):
     def _on_all_done(self, ok: int, failed: int) -> None:
         self.worker.wait()
         self.worker = None
+        if self._closing:
+            self.close()
+            return
         self._set_running(False)
         self.progress.setValue(1000 if not failed else self.progress.value())
         self.progress.setFormat(f"완료 {ok}개" + (f", 실패 {failed}개" if failed else ""))
@@ -517,11 +519,18 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         if self.worker is not None:
-            answer = QMessageBox.question(self, "종료", "변환 중입니다. 취소하고 종료할까요?")
-            if answer != QMessageBox.StandardButton.Yes:
-                event.ignore()
-                return
-            self.worker.cancel()
-            self.worker.wait(5000)
+            if not self._closing:
+                answer = QMessageBox.question(self, "종료", "변환 중입니다. 취소하고 종료할까요?")
+                if answer != QMessageBox.StandardButton.Yes:
+                    event.ignore()
+                    return
+                # 스레드가 도는 중에 창을 없애면 프로그램이 강제 종료되므로, 취소를 요청하고 끝나면 닫는다
+                self._closing = True
+                self.worker.cancel()
+                self.cancel_btn.setEnabled(False)
+                self.progress.setFormat("취소하는 중… 끝나면 자동으로 닫힙니다")
+                self._log("종료 요청: 지금 하던 작업이 끝나는 대로 닫습니다")
+            event.ignore()
+            return
         self._save_settings()
         super().closeEvent(event)

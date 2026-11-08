@@ -37,3 +37,14 @@ def test_subtitle_extract(video, tmp_path):
     assert "안녕하세요" in out.read_text(encoding="utf-8")
     results = engine.run(engine.plan([video], "srt"))
     assert "자막 트랙이 없는" in results[0].error
+
+
+def test_portrait_video_resolution_uses_short_side(tmp_path):
+    portrait = tmp_path / "세로.mp4"
+    subprocess.run([find_ffmpeg(), "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=360x640:rate=10",
+                    "-t", "1", "-c:v", "mpeg4", str(portrait)], check=True)
+    [out] = convert([portrait], "mp4", options={"resolution": "240p"})
+    import re
+
+    w, h = map(int, re.search(r", (\d+)x(\d+)", ffmpeg_info(out)).groups())
+    assert (w, h) == (240, 426)  # 짧은 변(가로)이 240

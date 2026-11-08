@@ -46,3 +46,54 @@ def test_rotate_flip_grayscale(images):
     assert img.size == (300, 400) and img.mode == "L"
     [jpg] = convert([images[3]], "jpg", options={"grayscale": "true"})  # 투명 + 흑백 → JPG
     assert Image.open(jpg).mode in ("L", "RGB")
+
+
+def test_multipage_tiff_to_pdf(tmp_path):
+    tiff = tmp_path / "스캔.tiff"
+    pages = [Image.new("RGB", (100, 140), c) for c in ("red", "green", "blue")]
+    pages[0].save(tiff, save_all=True, append_images=pages[1:])
+    [pdf] = convert([tiff], "pdf")
+    assert len(PdfReader(pdf).pages) == 3
+
+
+def test_cmyk_and_16bit_images(tmp_path):
+    import numpy as np
+
+    cmyk = tmp_path / "cmyk.jpg"
+    Image.new("CMYK", (50, 50), (0, 255, 255, 0)).save(cmyk)
+    for fmt in ("png", "gif", "ico", "webp"):
+        [out] = convert([cmyk], fmt)
+        assert Image.open(out).size[0] > 0
+    deep = tmp_path / "deep.png"
+    Image.fromarray(np.full((40, 40), 32768, dtype=np.uint16)).save(deep)  # 16비트 중간 회색
+    [jpg] = convert([deep], "jpg")
+    assert 100 < Image.open(jpg).convert("L").getpixel((20, 20)) < 160  # 하얗게(255) 나오면 안 됨
+    [pdf] = convert([deep], "pdf")
+    assert len(PdfReader(pdf).pages) == 1
+
+
+def test_animated_gif_keeps_frames(tmp_path):
+    gif = tmp_path / "anim.gif"
+    frames = [Image.new("RGB", (200, 200), c) for c in ("red", "green", "blue", "white", "black")]
+    frames[0].save(gif, save_all=True, append_images=frames[1:], duration=100, loop=0)
+    [small] = convert([gif], "gif", options={"max_width": "50"})
+    out = Image.open(small)
+    assert out.n_frames == 5 and out.size == (50, 50)
+    [webp] = convert([gif], "webp")
+    assert Image.open(webp).n_frames == 5
+
+
+def test_bracket_names_and_alias_targets(tmp_path):
+    from fileconv.core.utils import expand_inputs
+
+    real = tmp_path / "[MV] 사진.png"
+    Image.new("RGB", (10, 10), "red").save(real)
+    (tmp_path / "a1.png").write_bytes(real.read_bytes())
+    lookalike = tmp_path / "a[1].png"
+    Image.new("RGB", (10, 10), "blue").save(lookalike)
+    assert expand_inputs([str(real)]) == [real]
+    assert expand_inputs([str(lookalike)]) == [lookalike]  # a1.png 로 잘못 풀리면 안 됨
+    [jpeg] = convert([real], "jpeg")
+    assert jpeg.suffix == ".jpeg" and Image.open(jpeg).format == "JPEG"
+    [tif] = convert([real], "tif")
+    assert Image.open(tif).format == "TIFF"

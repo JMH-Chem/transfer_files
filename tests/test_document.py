@@ -107,3 +107,15 @@ def test_hwp_to_pdf_reports_unavailable_without_hancom(tmp_path):
     f.write_bytes(b"x")
     results = engine.run(engine.plan([f], "pdf"))
     assert "한컴오피스" in results[0].error
+
+
+def test_split_empty_pdf_reports_error(tmp_path):
+    from pypdf import PdfWriter
+
+    from fileconv.core import engine
+
+    empty = tmp_path / "empty.pdf"
+    with open(empty, "wb") as fh:
+        PdfWriter().write(fh)
+    results = engine.run(engine.plan([empty], "pdf", using="pdf-split"))
+    assert not results[0].ok and "페이지가 없는" in results[0].error

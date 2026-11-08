@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageSequence
 
 from ..core.base import Converter, Job, Option
 from ..core.errors import ConvertError
@@ -37,8 +37,24 @@ def open_image(path: Path) -> Image.Image:
     return img
 
 
+def to_8bit(img: Image.Image) -> Image.Image:
+    """16비트·32비트 흑백(I;16, I, F)은 값 범위를 0~255 로 맞춰 줄이고, CMYK 는 RGB 로 바꾼다.
+    (그냥 convert('RGB') 하면 16비트 값이 잘려서 거의 하얗게 나온다)"""
+    if img.mode.startswith("I;16") or img.mode in ("I", "F"):
+        import numpy as np
+
+        arr = np.asarray(img, dtype=np.float64)
+        top = float(arr.max()) if arr.size else 1.0
+        scale = 65535.0 if img.mode.startswith("I;16") or 255 < top <= 65535 else (255.0 if top <= 255 else top)
+        return Image.fromarray(np.clip(arr / scale * 255.0, 0, 255).astype(np.uint8), "L")
+    if img.mode == "CMYK":
+        return img.convert("RGB")
+    return img
+
+
 def flatten(img: Image.Image, background=(255, 255, 255)) -> Image.Image:
     """투명 배경을 흰색으로 채우고 RGB(또는 흑백)로 바꾼다."""
+    img = to_8bit(img)
     if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
         rgba = img.convert("RGBA")
         canvas = Image.new("RGB", rgba.size, background)
@@ -49,23 +65,29 @@ def flatten(img: Image.Image, background=(255, 255, 255)) -> Image.Image:
     return img.convert("RGB")
 
 
-def _pdf_ready_bytes(path: Path) -> bytes:
-    """img2pdf 가 그대로 넣을 수 있는 이미지 바이트. JPEG/일반 PNG 는 재압축 없이 원본 그대로."""
+def _pdf_ready_pages(path: Path) -> list[bytes]:
+    """img2pdf 에 넣을 이미지 바이트들 (보통 1개, 여러 쪽 TIFF 는 쪽마다 1개).
+    JPEG/일반 PNG 는 재압축 없이 원본 그대로 넣어 화질 손실이 없다."""
     img = open_image(path)
     fmt = (img.format or "").upper()
     has_alpha = img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info)
     if fmt == "JPEG" and img.mode in ("RGB", "L", "CMYK"):
-        return path.read_bytes()
+        return [path.read_bytes()]
     if fmt == "PNG" and not has_alpha and img.mode in ("RGB", "L", "P", "1") and not img.info.get("interlace"):
-        return path.read_bytes()
-    img = ImageOps.exif_transpose(img)
-    flat = flatten(img)
-    buf = io.BytesIO()
-    if fmt in _LOSSY_SOURCES:
-        flat.save(buf, "JPEG", quality=95)
-    else:
-        flat.save(buf, "PNG", optimize=False)
-    return buf.getvalue()
+        return [path.read_bytes()]
+    frames = [img]
+    if fmt == "TIFF" and getattr(img, "n_frames", 1) > 1:  # 여러 쪽 스캔 TIFF
+        frames = [frame.copy() for frame in ImageSequence.Iterator(img)]
+    pages: list[bytes] = []
+    for frame in frames:
+        flat = flatten(ImageOps.exif_transpose(frame))
+        buf = io.BytesIO()
+        if fmt in _LOSSY_SOURCES:
+            flat.save(buf, "JPEG", quality=95)
+        else:
+            flat.save(buf, "PNG", optimize=False)
+        pages.append(buf.getvalue())
+    return pages
 
 
 @register
@@ -115,7 +137,7 @@ class ImagesToPdf(Converter):
         total = len(job.inputs)
         images: list[bytes] = []
         for i, path in enumerate(job.inputs):
-            images.append(_pdf_ready_bytes(path))
+            images.extend(_pdf_ready_pages(path))
             job.progress(0.8 * (i + 1) / total)
         try:
             pdf = img2pdf.convert(images, layout_fun=layout, rotation=img2pdf.Rotation.ifvalid)
@@ -123,9 +145,11 @@ class ImagesToPdf(Converter):
             # 특이한 형식이면 Pillow 로 다시 저장해서 한 번 더 시도
             images = []
             for path in job.inputs:
-                buf = io.BytesIO()
-                flatten(ImageOps.exif_transpose(open_image(path))).save(buf, "PNG")
-                images.append(buf.getvalue())
+                img = open_image(path)
+                for frame in ImageSequence.Iterator(img) if (img.format or "").upper() == "TIFF" else [img]:
+                    buf = io.BytesIO()
+                    flatten(ImageOps.exif_transpose(frame.copy())).save(buf, "PNG")
+                    images.append(buf.getvalue())
             try:
                 pdf = img2pdf.convert(images, layout_fun=layout)
             except Exception as exc:
@@ -153,20 +177,15 @@ class ImageConvert(Converter):
         Option("keep_exif", "bool", False, "촬영 정보 유지", "JPG/WEBP 저장 시 EXIF(촬영일, 위치 등) 유지"),
     )
 
-    def convert(self, job: Job) -> list[Path]:
-        src = job.inputs[0]
-        img = open_image(src)
-        img = ImageOps.exif_transpose(img)  # 회전 정보 적용 (EXIF 의 회전 태그도 함께 정리됨)
-        exif = img.info.get("exif") if job.opt("keep_exif") else None
-        job.progress(0.3)
-
+    def _transform(self, img: Image.Image, job: Job, fmt: str) -> Image.Image:
+        """크기 줄이기·회전·뒤집기·흑백·저장 형식에 맞는 색 변환 (애니메이션이면 프레임마다)."""
+        img = to_8bit(img)
         max_w, max_h = job.opt("max_width", 0), job.opt("max_height", 0)
         if max_w or max_h:
             limit = (max_w or img.width, max_h or img.height)
             if img.width > limit[0] or img.height > limit[1]:
                 img = img.copy()
                 img.thumbnail(limit, Image.Resampling.LANCZOS)
-
         turns = {"90": Image.Transpose.ROTATE_270, "180": Image.Transpose.ROTATE_180, "270": Image.Transpose.ROTATE_90}
         if job.opt("rotate", "0") in turns:
             img = img.transpose(turns[job.opt("rotate")])
@@ -175,29 +194,55 @@ class ImageConvert(Converter):
         elif job.opt("flip") == "상하":
             img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
         if job.opt("grayscale"):
-            img = img.convert("LA") if img.mode in ("RGBA", "LA", "PA") else img.convert("L")
+            img = img.convert("LA") if img.mode in ("RGBA", "LA", "PA", "P") and _has_alpha(img) else img.convert("L")
+        if fmt in ("JPEG", "BMP"):
+            img = flatten(img.convert("RGBA") if img.mode in ("LA", "PA") else img)
+        elif img.mode not in ("1", "L", "LA", "P", "RGB", "RGBA"):
+            img = img.convert("RGBA" if _has_alpha(img) else "RGB")
+        return img
 
+    def convert(self, job: Job) -> list[Path]:
+        src = job.inputs[0]
+        img = open_image(src)
         fmt = _PIL_FORMATS[job.target if job.target in _PIL_FORMATS else "png"]
-        save_kwargs: dict = {}
-        if fmt == "JPEG":
-            img = flatten(img.convert("RGBA") if img.mode == "LA" else img)
-            if img.mode == "CMYK":
-                img = img.convert("RGB")
-            save_kwargs = {"quality": job.opt("quality", 90), "optimize": True}
-        elif fmt == "WEBP":
-            save_kwargs = {"quality": job.opt("quality", 90), "method": 4}
-        elif fmt == "BMP":
-            img = flatten(img)
-        elif fmt == "ICO":
-            size = min(256, max(img.width, img.height))
-            save_kwargs = {"sizes": [(s, s) for s in (16, 32, 48, 64, 128, 256) if s <= size] or [(size, size)]}
-        elif fmt == "PNG":
-            save_kwargs = {"optimize": True}
-        if exif and fmt in ("JPEG", "WEBP"):
-            save_kwargs["exif"] = exif
+        exif = None
+        if job.opt("keep_exif"):
+            exif = ImageOps.exif_transpose(img).info.get("exif")
+        animated = getattr(img, "n_frames", 1) > 1 and fmt in ("GIF", "WEBP") and (img.format or "") in ("GIF", "WEBP", "PNG")
+        if animated:  # 움직이는 GIF/WEBP 는 모든 프레임을 유지
+            frames, durations = [], []
+            for frame in ImageSequence.Iterator(img):
+                durations.append(frame.info.get("duration", img.info.get("duration", 100)))
+                frames.append(self._transform(frame.convert("RGBA"), job, fmt))
+                job.cancel.check()
+            first, rest = frames[0], frames[1:]
+            save_kwargs: dict = {"save_all": True, "append_images": rest, "duration": durations,
+                                 "loop": img.info.get("loop", 0)}
+            if fmt == "WEBP":
+                save_kwargs["quality"] = job.opt("quality", 90)
+            else:
+                save_kwargs["disposal"] = 2
+        else:
+            first = self._transform(ImageOps.exif_transpose(img), job, fmt)
+            save_kwargs = {}
+            if fmt == "JPEG":
+                save_kwargs = {"quality": job.opt("quality", 90), "optimize": True}
+            elif fmt == "WEBP":
+                save_kwargs = {"quality": job.opt("quality", 90), "method": 4}
+            elif fmt == "ICO":
+                size = min(256, max(first.width, first.height))
+                save_kwargs = {"sizes": [(s, s) for s in (16, 32, 48, 64, 128, 256) if s <= size] or [(size, size)]}
+            elif fmt == "PNG":
+                save_kwargs = {"optimize": True}
+            if exif and fmt in ("JPEG", "WEBP"):
+                save_kwargs["exif"] = exif
         job.progress(0.6)
         try:
-            img.save(job.output, fmt, **save_kwargs)
+            first.save(job.output, fmt, **save_kwargs)
         except Exception as exc:
             raise ConvertError(f"이미지 저장 실패 ({src.name} → {fmt}): {exc}") from exc
         return [job.output]
+
+
+def _has_alpha(img: Image.Image) -> bool:
+    return img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info)

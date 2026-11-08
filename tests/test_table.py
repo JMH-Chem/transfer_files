@@ -72,3 +72,29 @@ def test_csv_encoding_conversion(korean_csv):
     [out] = convert([korean_csv], "csv", options={"out_encoding": "utf-8"})
     text = out.read_text(encoding="utf-8")
     assert "홍길동" in text and "01234" in text and "1,000" in text
+
+
+def test_ragged_rows_are_kept(tmp_path):
+    f = tmp_path / "ragged.csv"
+    f.write_text("이름,나이,도시\n홍길동,30,서울,\n김철수,25,부산, 강서구,추가\n", encoding="utf-8")
+    [x] = convert([f], "xlsx")
+    rows = [[c.value for c in r] for r in openpyxl.load_workbook(x).active.iter_rows()]
+    assert rows[0] == ["이름", "나이", "도시", "열4", "열5"]
+    assert rows[1] == ["홍길동", 30, "서울", None, None]  # 줄 끝 쉼표 때문에 이름이 사라지면 안 됨
+    assert rows[2] == ["김철수", 25, "부산", "강서구", "추가"]  # 칸이 많은 줄도 버리지 않음
+
+
+def test_trailing_comma_column_removed(tmp_path):
+    f = tmp_path / "t.csv"
+    f.write_text("a,b,\n1,2,\n3,4,\n", encoding="utf-8")
+    [x] = convert([f], "xlsx")
+    assert pd.read_excel(x).columns.tolist() == ["a", "b"]
+
+
+def test_formula_like_text_stays_text(tmp_path):
+    f = tmp_path / "f.csv"
+    f.write_text('제목,링크\n=== 중요 ===,"=HYPERLINK(""http://x"")"\n', encoding="utf-8")
+    [x] = convert([f], "xlsx")
+    ws = openpyxl.load_workbook(x).active
+    assert ws["A2"].value == "=== 중요 ===" and ws["A2"].data_type == "s"
+    assert ws["B2"].data_type == "s"

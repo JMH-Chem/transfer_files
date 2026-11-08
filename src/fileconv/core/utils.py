@@ -37,8 +37,9 @@ def expand_inputs(items: Iterable[str | Path], recursive: bool = False) -> list[
 
     for item in items:
         text = str(item)
-        if any(ch in text for ch in "*?["):
-            matches = [Path(m) for m in glob.glob(text, recursive=True) if Path(m).is_file()]
+        # '[MV] 노래.mp4' 처럼 이름에 [ ] 가 있는 실제 파일/폴더는 와일드카드로 보지 않는다
+        if any(ch in text for ch in "*?[") and not Path(text).expanduser().exists():
+            matches = [Path(m) for m in glob.glob(text, recursive=True) if Path(m).is_file() and not is_junk(Path(m))]
             if not matches:
                 raise ConvertError(f"패턴에 맞는 파일이 없습니다: {text}")
             for m in sorted(matches, key=natural_key):
@@ -47,13 +48,23 @@ def expand_inputs(items: Iterable[str | Path], recursive: bool = False) -> list[
         path = Path(text).expanduser()
         if path.is_dir():
             files = path.rglob("*") if recursive else path.iterdir()
-            for f in sorted((f for f in files if f.is_file()), key=natural_key):
+            for f in sorted((f for f in files if f.is_file() and not is_junk(f)), key=natural_key):
                 add(f)
         elif path.is_file():
             add(path)
         else:
             raise ConvertError(f"파일을 찾을 수 없습니다: {text}")
     return result
+
+
+_JUNK_NAMES = {"desktop.ini", "thumbs.db", ".ds_store", "ehthumbs.db"}
+
+
+def is_junk(path: Path) -> bool:
+    """폴더를 통째로 넣을 때 건너뛸 시스템/임시 파일 (desktop.ini, Thumbs.db, ~$문서.docx, 숨김 파일, 변환 중 임시 파일)."""
+    name = path.name
+    return (name.lower() in _JUNK_NAMES or name.startswith(("~$", "."))
+            or ".fconv-part." in name)
 
 
 def unique_path(path: Path, overwrite: bool = False, reserved: set[Path] | None = None) -> Path:

@@ -115,7 +115,7 @@ def info_cmd(name: str = typer.Argument(..., help="변환기 이름 (fconv list 
 def convert_cmd(
     inputs: List[str] = typer.Argument(..., help="변환할 파일들 (*.jpg 같은 와일드카드, 폴더도 가능)"),
     to: str = typer.Option(..., "--to", "-t", help="출력 형식 (확장자). 예: mp3, pdf, xlsx"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="출력 파일 또는 폴더 (기본: 원본과 같은 폴더)"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="출력 파일 또는 폴더 (기본: 원본과 같은 폴더). 폴더는 끝에 \\ 또는 / 를 붙이면 확실"),
     merge: bool = typer.Option(False, "--merge", "-m", help="여러 파일을 하나로 합치기 (이미지→PDF, PDF 합치기, CSV→엑셀 시트)"),
     opts: List[str] = typer.Option([], "--opt", "-O", help="변환 옵션 '이름=값' (여러 번 가능). fconv info 로 확인"),
     using: Optional[str] = typer.Option(None, "--using", "-u", help="변환기를 직접 지정 (예: pdf-split)"),
@@ -133,6 +133,12 @@ def convert_cmd(
     try:
         options = _parse_opts(opts)
         files = expand_inputs(inputs, recursive=recursive)
+        files, skipped = engine.supported_split(files, to, using)
+        if not files:
+            # 모두 지원하지 않는 형식이면 첫 파일로 자세한 이유(가능한 형식 목록)를 보여준다
+            engine.plan(skipped[:1], to, using=using)
+        for path in skipped:
+            err_console.print(f"[yellow]건너뜀[/yellow] {path.name} (.{to} 로 바꿀 수 없는 형식)")
         tasks = engine.plan(files, to, output=output, merge=merge, using=using, options=options, overwrite=overwrite)
     except ConvertError as exc:
         err_console.print(f"[red]오류:[/red] {exc}")

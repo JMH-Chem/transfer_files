@@ -56,6 +56,45 @@ def _guess_delimiter(sample: str, ext: str) -> str | None:
     return None  # 구분자 없음 → 한 줄이 한 칸
 
 
+def split_rows(text: str, delim: str | None) -> list[list[str]]:
+    """글자를 줄·칸으로 나눈다. 따옴표("a,b")와 따옴표 안 줄바꿈도 처리. 빈 줄은 건너뜀."""
+    if delim is None:  # 구분자 없음 → 한 줄이 한 칸
+        return [[line] for line in text.splitlines() if line.strip()]
+    if delim == r"\s+":
+        return [line.split() for line in text.splitlines() if line.strip()]
+    from io import StringIO
+
+    return [row for row in csv.reader(StringIO(text), delimiter=delim) if any(c.strip() for c in row)]
+
+
+def rows_to_frame(rows: list[list[str]], header: bool) -> pd.DataFrame:
+    """줄마다 칸 수가 달라도 버리지 않는다: 모자라면 빈칸, 남으면 '열N' 열을 더 만든다.
+    줄 끝 쉼표처럼 전부 비어 있는 오른쪽 열은 지운다."""
+    width = max((len(r) for r in rows), default=0)
+    rows = [[c.strip() for c in r] + [""] * (width - len(r)) for r in rows]
+    names: list[str] = []
+    if header and rows:
+        used: set[str] = set()
+        for i, raw in enumerate(rows[0]):
+            name = raw.strip() or f"열{i + 1}"
+            candidate, n = name, 2
+            while candidate in used:  # 같은 이름 열은 '이름_2' 처럼 구분
+                candidate, n = f"{name}_{n}", n + 1
+            used.add(candidate)
+            names.append(candidate)
+        body = rows[1:]
+        header_blank = [not c.strip() for c in rows[0]]
+    else:
+        names = [f"열{i + 1}" for i in range(width)]
+        body = rows
+        header_blank = [True] * width
+    keep = width
+    while keep > 1 and header_blank[keep - 1] and all(not r[keep - 1].strip() for r in body):
+        keep -= 1
+    df = pd.DataFrame([r[:keep] for r in body], columns=names[:keep], dtype=object)
+    return df.replace("", pd.NA)
+
+
 def _smart_numbers(df: pd.DataFrame) -> pd.DataFrame:
     """글자로 읽은 표에서 '진짜 숫자' 열만 숫자로 바꾼다 (0으로 시작하는 코드 값 등은 보존)."""
     for col in df.columns:
@@ -91,29 +130,11 @@ def read_text_table(path: Path, job: Job) -> dict[str, pd.DataFrame]:
 
     choice = job.opt("delimiter", "자동")
     delim = _guess_delimiter(text[:20000], ext) if choice == "자동" else DELIMITERS[choice]
-    header = 0 if job.opt("header", True) else None
-    from io import StringIO
-
     try:
-        if delim is None:  # 구분자 없음 → 한 줄이 한 칸
-            rows = text.splitlines()
-            df = pd.DataFrame({rows[0]: rows[1:]}) if header == 0 and rows else pd.DataFrame({"내용": rows})
-        else:
-            df = pd.read_csv(
-                StringIO(text),
-                sep=delim,
-                header=header,
-                dtype=str,
-                keep_default_na=False,
-                engine="python",
-                skipinitialspace=delim == r"\s+",
-                on_bad_lines="warn",
-            )
-    except Exception as exc:
+        rows = split_rows(text, delim)
+    except csv.Error as exc:
         raise ConvertError(f"{path.name}: 표로 읽을 수 없습니다 ({exc})") from exc
-    if header is None:
-        df.columns = [f"열{i + 1}" for i in range(len(df.columns))]
-    df = df.replace("", pd.NA)
+    df = rows_to_frame(rows, job.opt("header", True))
     if job.opt("numbers", True):
         df = _smart_numbers(df)
     return {path.stem: df}
@@ -162,6 +183,10 @@ def write_excel(sheets: list[tuple[str, pd.DataFrame]], output: Path, header: bo
             name = safe_sheet_name(raw_name, used)
             df.to_excel(writer, sheet_name=name, index=False, header=header)
             ws = writer.sheets[name]
+            for row in ws.iter_rows():  # '=' 로 시작하는 글자가 엑셀 수식으로 저장되지 않게 (수식 주입 방지)
+                for cell in row:
+                    if cell.data_type == "f":
+                        cell.data_type = "s"
             for idx, col in enumerate(df.columns, start=1):
                 sample = df[col].head(500).tolist()
                 width = max([_display_width(col) if header else 0] + [_display_width(v) for v in sample])

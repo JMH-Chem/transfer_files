@@ -71,7 +71,8 @@ def plan(
     inputs: list[Path],
     target: str,
     *,
-    output: Path | None = None,
+    output: Path | str | None = None,
+    output_dir: Path | str | None = None,
     merge: bool = False,
     using: str | None = None,
     options: dict[str, Any] | None = None,
@@ -80,34 +81,40 @@ def plan(
     """어떤 변환기로 어떤 출력 파일을 만들지 미리 계산한다 (아직 파일은 건드리지 않음).
 
     출력 경로 규칙
-    - output 없음        → 원본과 같은 폴더에 '원본이름.target'
-    - output 이 폴더     → 그 폴더 안에 '원본이름.target'
-    - output 이 파일 경로 → 그 파일 (입력이 하나이거나 merge 일 때만)
+    - 아무것도 안 줌       → 원본과 같은 폴더에 '원본이름.target'
+    - output_dir           → 그 폴더 안에 '원본이름.target' (없으면 만듦)
+    - output 이 폴더       → (이미 있는 폴더, 끝이 / 또는 \\, 또는 입력이 여러 개라 파일 하나로 못 받을 때) 폴더로 취급
+    - output 이 파일 경로   → 그 파일 (입력이 하나이거나 merge 일 때만). 확장자가 없으면 붙여 줌
     - 같은 이름 파일이 있으면 '이름 (1).target' (overwrite=True 면 덮어씀, 단 원본은 절대 덮어쓰지 않음)
+    - 이번에 만들 결과 파일끼리도 이름이 겹치지 않게 한다
     """
     if not inputs:
         raise ConvertError("변환할 파일이 없습니다")
-    target = target.strip().lstrip(".").lower()
-    if not target:
+    suffix = target.strip().lstrip(".").lower()  # 파일 이름에 쓸 확장자 (사용자가 쓴 그대로: jpeg, tif …)
+    if not suffix:
         raise ConvertError("출력 형식(확장자)을 지정하세요. 예: mp3, pdf, xlsx")
+    key = norm_ext(suffix)  # 변환기에 넘길 표준 형식 이름 (jpeg → jpg, tif → tiff)
     options = options or {}
 
-    convs = [_pick_converter(p, target, using) for p in inputs]
+    convs = [_pick_converter(p, key, using) for p in inputs]
     reserved: set[Path] = {p.resolve() for p in inputs}
-    out_dir: Path | None = None
+    out_dir: Path | None = Path(output_dir).expanduser() if output_dir else None
     out_file: Path | None = None
     if output is not None:
-        output = Path(output).expanduser()
+        text = str(output)
+        output = Path(text).expanduser()
         single_output = merge or len(inputs) == 1
-        if output.is_dir() or str(output).endswith(("/", "\\")) or (output.suffix == "" and not single_output):
+        if output.is_dir() or text.endswith(("/", "\\")) or not single_output:
             out_dir = output
         else:
-            out_file = output if output.suffix else output.with_suffix(f".{target}")
+            out_file = output if output.suffix else output.with_suffix(f".{suffix}")
 
-    def finalize(path: Path, conv: Converter) -> Path:
-        if conv.multi_output:  # 여러 파일을 만드는 변환기는 '기준 이름'만 넘기고, 파일마다 이름 충돌을 직접 처리
+    def finalize(path: Path, conv: Converter, task_inputs: list[Path]) -> Path:
+        if conv.multi_output and path.resolve() in {p.resolve() for p in task_inputs}:
+            # 예: PDF 나누기는 '문서.pdf' 를 기준 이름으로만 쓰고 '문서_p001.pdf' 들을 만든다
             return path
-        final = unique_path(path, overwrite=overwrite, reserved=reserved)
+        # 여러 파일을 만드는 변환기는 디스크의 기존 파일과의 충돌을 실행할 때 직접 피하므로 여기서는 계획끼리만 비교
+        final = unique_path(path, overwrite=overwrite or conv.multi_output, reserved=reserved)
         reserved.add(final.resolve())
         return final
 
@@ -121,20 +128,29 @@ def plan(
         parsed = conv.parse_options(options)
         if out_file is None:
             base = out_dir or inputs[0].parent
-            out_file = base / f"{inputs[0].stem}_merged.{target}"
-        return [Task(conv, list(inputs), finalize(out_file, conv), target, parsed, overwrite)]
+            out_file = base / f"{inputs[0].stem}_merged.{suffix}"
+        return [Task(conv, list(inputs), finalize(out_file, conv, inputs), key, parsed, overwrite)]
 
     tasks: list[Task] = []
     parsed_cache: dict[str, dict[str, Any]] = {}
     for path, conv in zip(inputs, convs):
         if conv.name not in parsed_cache:
             parsed_cache[conv.name] = conv.parse_options(options)
-        if out_file is not None:
-            dest = out_file
-        else:
-            dest = (out_dir or path.parent) / f"{path.stem}.{target}"
-        tasks.append(Task(conv, [path], finalize(dest, conv), target, parsed_cache[conv.name], overwrite))
+        dest = out_file if out_file is not None else (out_dir or path.parent) / f"{path.stem}.{suffix}"
+        tasks.append(Task(conv, [path], finalize(dest, conv, [path]), key, parsed_cache[conv.name], overwrite))
     return tasks
+
+
+def supported_split(inputs: list[Path], target: str, using: str | None = None) -> tuple[list[Path], list[Path]]:
+    """(이 형식으로 바꿀 수 있는 파일, 바꿀 수 없는 파일). 폴더를 통째로 넣었을 때 섞인 파일을 걸러낼 때 쓴다."""
+    ok, skipped = [], []
+    for path in inputs:
+        try:
+            _pick_converter(path, norm_ext(target.strip().lstrip(".")), using)
+            ok.append(path)
+        except NoConverterError:
+            skipped.append(path)
+    return ok, skipped
 
 
 ProgressCb = Callable[[int, float], None]
