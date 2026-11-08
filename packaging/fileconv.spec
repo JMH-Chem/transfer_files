@@ -3,6 +3,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
+from fileconv.gui.icon import save_ico
+
+ICON = str(save_ico("../build/fileconv.ico"))  # 코드로 그린 아이콘을 .ico 로 저장
+
 datas, binaries, hiddenimports = [], [], []
 for pkg in ("pypdfium2", "pypdfium2_raw", "pillow_heif", "imageio_ffmpeg"):
     d, b, h = collect_all(pkg)
@@ -39,6 +43,7 @@ gui_exe = EXE(
     exclude_binaries=True,
     name="FileConverter",
     console=False,          # 검은 콘솔 창 없이 실행
+    icon=ICON,
     upx=False,
 )
 cli_exe = EXE(
@@ -46,6 +51,7 @@ cli_exe = EXE(
     exclude_binaries=True,
     name="fconv",
     console=True,
+    icon=ICON,
     upx=False,
 )
 coll = COLLECT(

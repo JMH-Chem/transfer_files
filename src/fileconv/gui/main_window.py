@@ -80,6 +80,14 @@ class FileList(QListWidget):
     def paths(self) -> list[Path]:
         return [Path(self.item(i).data(ROLE_PATH)) for i in range(self.count())]
 
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            for item in self.selectedItems():
+                self.takeItem(self.row(item))
+            self.model().rowsRemoved.emit(self.rootIndex(), 0, 0)
+        else:
+            super().keyPressEvent(event)
+
 
 class MainWindow(QMainWindow):
     def __init__(self, initial_files: list[str] | None = None) -> None:
@@ -90,7 +98,10 @@ class MainWindow(QMainWindow):
         self.converter: Converter | None = None
         self.worker: ConvertWorker | None = None
         self.last_output_dir: Path | None = None
+        self.setAcceptDrops(True)
         self._build_ui()
+        self.file_list.model().rowsRemoved.connect(lambda *_: self._update_count())
+        self.file_list.model().rowsInserted.connect(lambda *_: self._update_count())
         self._restore_settings()
         if initial_files:
             self.add_paths(initial_files)
@@ -401,6 +412,7 @@ class MainWindow(QMainWindow):
     def start_conversion(self) -> None:
         if self.worker is not None:
             return
+        self._refresh_file_marks()  # 지난 결과 표시(✓/✗) 지우기
         try:
             tasks = self.build_tasks()
         except ConvertError as exc:
@@ -442,6 +454,15 @@ class MainWindow(QMainWindow):
         self._log(f"{'✓' if ok else '✗'} {label}\n    {message}")
         if ok and task:
             self.last_output_dir = task.output.parent
+        if task:  # 목록의 파일 이름 앞에 결과 표시
+            done = {str(p) for p in task.inputs}
+            for i in range(self.file_list.count()):
+                item = self.file_list.item(i)
+                if item.data(ROLE_PATH) in done:
+                    name = Path(item.data(ROLE_PATH)).name
+                    item.setText(f"{'✓' if ok else '✗'} {name}")
+                    item.setToolTip(f"{item.data(ROLE_PATH)}\n{message}")
+                    item.setForeground(Qt.GlobalColor.darkGreen if ok else Qt.GlobalColor.red)
 
     def _on_all_done(self, ok: int, failed: int) -> None:
         self.worker.wait()
@@ -460,6 +481,17 @@ class MainWindow(QMainWindow):
 
     def _log(self, text: str) -> None:
         self.log.appendPlainText(text)
+
+    # ------------------------------------------------------------ 창 전체에 끌어다 놓기
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls() and self.worker is None:
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        if paths:
+            event.acceptProposedAction()
+            self.add_paths(paths)
 
     # ------------------------------------------------------------ 설정 저장
     def _restore_settings(self) -> None:

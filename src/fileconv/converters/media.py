@@ -99,6 +99,7 @@ class ToAudio(Converter):
     inputs = frozenset(VIDEO_EXTS | AUDIO_EXTS)
     outputs = frozenset(AUDIO_OUT)
     default_output = "mp3"
+    priority = 10
     can_merge = True  # 여러 파일을 이어 붙여 음성 파일 하나로
     options = (
         Option("bitrate", "choice", "192k", "비트레이트", "음질(mp3/aac/m4a/ogg/opus에만 적용). 클수록 고음질·큰 파일",

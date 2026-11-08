@@ -14,6 +14,9 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("fileconv")
     app.setStyle("Fusion")
+    from .icon import qicon
+
+    app.setWindowIcon(qicon())
     files = [a for a in argv[1:] if not a.startswith("-") and a != "gui"]
     window = MainWindow(initial_files=files)
     window.show()
