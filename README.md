@@ -7,6 +7,8 @@
 - ffmpeg 가 함께 설치되므로 따로 설치할 프로그램이 거의 없습니다 (Word → PDF 만 MS Office 또는 LibreOffice 필요)
 - 한글 CSV(cp949) 인코딩 자동 감지, 한글 글꼴 PDF, 한글(HWP/HWPX) 문서 지원
 
+![파일 변환기 화면](docs/screenshot.png)
+
 ---
 
 ## 지원하는 변환
