@@ -252,7 +252,7 @@ class ExcelToText(Converter):
         outputs: list[Path] = []
         for name in selected:
             if len(selected) == 1:
-                dest = job.output
+                dest = unique_path(job.output, job.overwrite)
             else:
                 safe = re.sub(r'[\\/:*?"<>|]', "_", name)
                 dest = unique_path(job.output.with_name(f"{job.output.stem}_{safe}{job.output.suffix}"), job.overwrite)

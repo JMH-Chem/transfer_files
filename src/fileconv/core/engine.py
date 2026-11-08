@@ -208,6 +208,9 @@ def _run_one(index: int, task: Task, on_progress: ProgressCb | None, cancel: Can
         result.error = str(exc)
     except ConvertError as exc:
         result.error = str(exc)
+    except PermissionError as exc:
+        name = Path(exc.filename).name if getattr(exc, "filename", None) else final.name
+        result.error = f"파일에 쓸 수 없습니다: {name} — 다른 프로그램(엑셀, 한글, PDF 뷰어 등)에서 열려 있으면 닫고 다시 시도하세요"
     except Exception as exc:  # 예상 못 한 오류도 프로그램 전체를 멈추지 않게
         log.debug("변환 실패\n%s", traceback.format_exc())
         result.error = f"예상치 못한 오류 ({type(exc).__name__}): {exc}"

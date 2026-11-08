@@ -50,3 +50,19 @@ def test_gui_unsupported_files_skipped(qapp, images, korean_csv, tmp_path):
     tasks = w.build_tasks()
     assert [t.inputs[0].name for t in tasks] == ["고객목록.csv"]
     w.close()
+
+
+def test_gui_text_to_pdf_in_worker_thread(qapp, tmp_path):
+    """Qt 로 PDF 를 그리는 변환이 GUI 백그라운드 스레드에서도 문제없이 도는지."""
+    from fileconv.gui.main_window import MainWindow
+
+    md = tmp_path / "메모.md"
+    md.write_text("# 제목\n\n본문입니다.", encoding="utf-8")
+    w = MainWindow()
+    w.add_paths([str(md)])
+    w.select_converter("text-to-pdf")
+    assert w.target_combo.currentText() == "pdf"
+    w.start_conversion()
+    wait(qapp, w)
+    assert (tmp_path / "메모.pdf").stat().st_size > 1000
+    w.close()

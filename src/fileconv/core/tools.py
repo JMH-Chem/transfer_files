@@ -16,7 +16,15 @@ CREATE_NO_WINDOW = 0x08000000 if IS_WINDOWS else 0
 
 
 def popen_kwargs() -> dict:
-    return {"creationflags": CREATE_NO_WINDOW} if IS_WINDOWS else {}
+    """외부 프로그램 실행 공통 인자.
+
+    stdin 을 명시적으로 막아 둔다: 콘솔 없는 Windows GUI(.exe)에서는 부모의 표준 입력 핸들이 없어서
+    지정하지 않으면 '핸들이 잘못되었습니다(WinError 6)' 로 실행이 실패한다.
+    """
+    kwargs: dict = {"stdin": subprocess.DEVNULL}
+    if IS_WINDOWS:
+        kwargs["creationflags"] = CREATE_NO_WINDOW
+    return kwargs
 
 
 @functools.lru_cache(maxsize=None)

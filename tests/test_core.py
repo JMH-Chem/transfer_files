@@ -125,3 +125,30 @@ def test_safe_sheet_name():
     assert safe_sheet_name("a/b:c", used) == "a_b_c"
     assert safe_sheet_name("A_B_C", used) == "A_B_C_2"
     assert len(safe_sheet_name("x" * 40, used)) == 31
+
+
+def test_permission_error_message(tmp_path, monkeypatch):
+    import os
+
+    f = tmp_path / "a.md"
+    f.write_text("# hi", encoding="utf-8")
+
+    def locked(src, dst):
+        raise PermissionError(13, "Permission denied", str(dst))
+
+    monkeypatch.setattr(os, "replace", locked)
+    results = engine.run(engine.plan([f], "html"))
+    assert "다른 프로그램" in results[0].error
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a.md"]  # 임시 파일도 정리됨
+
+
+def test_excel_single_sheet_does_not_overwrite(tmp_path):
+    import pandas as pd
+
+    book = tmp_path / "b.xlsx"
+    pd.DataFrame({"a": [1]}).to_excel(book, index=False)
+    existing = tmp_path / "b.csv"
+    existing.write_text("keep", encoding="utf-8")
+    results = engine.run(engine.plan([book], "csv"))
+    assert results[0].outputs[0].name == "b (1).csv"
+    assert existing.read_text(encoding="utf-8") == "keep"
