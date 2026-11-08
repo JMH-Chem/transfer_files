@@ -1,5 +1,25 @@
 # 만능 파일 변환기 (fileconv) 설계안
 
+## 진행 상황 (2026-11-09 새벽 기준)
+
+**완료**
+- 변환 엔진(core), 명령줄 `fconv`, 창 프로그램(GUI), 변환기 20종 — 사용법은 README.md
+- 1단계 기능 4종 전부 + 2단계 일부 (동영상 변환/압축, GIF, 자막 추출, 텍스트·Markdown→PDF, PDF 용량 줄이기·암호,
+  음성 이어 붙이기, 이미지 회전·흑백, 한글 HWP/HWPX→텍스트, 한컴오피스가 있으면 HWP→PDF)
+- 테스트 70여 개 (GitHub Actions 에서 Windows·Linux 자동 실행), Windows .exe 자동 빌드(Actions 의 FileConverter-windows)
+- 탐색기 "보내기" 메뉴 등록 `fconv sendto`
+
+**사용자 PC(Windows)에서 직접 확인이 필요한 것** — 이 환경에는 없어서 시험하지 못함
+- MS Word/엑셀/PPT → PDF (MS Office 자동화), 한컴오피스 → PDF, `fconv sendto`, 만든 .exe 를 더블클릭해서 실행
+
+**정해 주셔야 하는 것 (다음 단계 후보)**
+- 문자 인식(OCR): 스캔 PDF/사진 → 글자. Tesseract 설치(약 100MB) 또는 온라인 서비스 사용 여부
+- 음성 → 텍스트 받아쓰기(Whisper): 모델 다운로드 수백 MB~수 GB, PC 성능 필요
+- PDF → Word(docx): 쓸 만한 라이브러리(pdf2docx 등)가 AGPL/GPL 라이선스 — 개인용이면 문제없음
+- 실행 파일 배포 방식: 폴더째 zip(현재) / 설치 프로그램(Inno Setup) / 파일 하나짜리 exe(실행이 느림)
+
+---
+
 ## Context
 `transfer_files` 저장소에 다양한 파일 변환 기능을 **하나의 프로그램**으로 모으려 한다.
 - 사용 형태: **CLI + 데스크톱 GUI** (같은 변환 엔진을 공유)

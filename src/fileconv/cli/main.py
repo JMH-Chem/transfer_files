@@ -187,6 +187,55 @@ def convert_cmd(
         raise typer.Exit(1)
 
 
+@app.command("doctor")
+def doctor_cmd() -> None:
+    """설치 상태 점검: 외부 프로그램(ffmpeg, LibreOffice, MS Office, 한컴오피스)과 사용 가능한 변환."""
+    import platform
+    import subprocess
+
+    from ..core.tools import IS_WINDOWS, find_ffmpeg, find_soffice, has_hancom, has_ms_office, popen_kwargs
+
+    table = Table(title="fileconv 점검", show_header=False)
+    table.add_column("항목", style="bold")
+    table.add_column("상태")
+
+    def mark(ok: bool, text: str) -> str:
+        return f"[green]✓[/green] {text}" if ok else f"[yellow]✗[/yellow] {text}"
+
+    table.add_row("fileconv", __version__)
+    table.add_row("Python", f"{platform.python_version()} ({sys.executable})")
+    table.add_row("운영체제", f"{platform.system()} {platform.release()}")
+    ffmpeg = find_ffmpeg()
+    version = ""
+    if ffmpeg:
+        try:
+            out = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", timeout=20, **popen_kwargs()).stdout
+            version = out.split("\n", 1)[0]
+        except Exception as exc:  # noqa: BLE001
+            version = f"실행 실패: {exc}"
+    table.add_row("ffmpeg", mark(bool(ffmpeg), f"{version}\n[dim]{ffmpeg}[/dim]" if ffmpeg else "없음"))
+    soffice = find_soffice()
+    table.add_row("LibreOffice", mark(bool(soffice), soffice or "없음 (Word→PDF 에 MS Office 가 없을 때 필요)"))
+    if IS_WINDOWS:
+        for app_name in ("Word", "Excel", "PowerPoint"):
+            table.add_row(f"MS {app_name}", mark(has_ms_office(app_name), "설치됨" if has_ms_office(app_name) else "없음"))
+        table.add_row("한컴오피스 한글", mark(has_hancom(), "설치됨" if has_hancom() else "없음 (HWP→PDF 에 필요)"))
+    try:
+        from ..converters.document import _default_font, _ensure_qt
+
+        _ensure_qt()
+        table.add_row("PDF 글꼴", mark(True, _default_font()))
+    except Exception as exc:  # noqa: BLE001
+        table.add_row("PDF 글꼴", mark(False, f"확인 실패: {exc}"))
+    convs = all_converters()
+    unavailable = [(c, c.is_available()[1]) for c in convs if not c.is_available()[0]]
+    table.add_row("변환", f"{len(convs) - len(unavailable)}/{len(convs)}개 사용 가능")
+    for conv, why in unavailable:
+        table.add_row("", f"[yellow]사용 불가[/yellow] {conv.title}: [dim]{why}[/dim]")
+    console.print(table)
+
+
 @app.command("gui")
 def gui_cmd() -> None:
     """GUI(창) 프로그램을 실행합니다."""

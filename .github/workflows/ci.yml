@@ -39,8 +39,25 @@ jobs:
       - name: PyInstaller
         working-directory: packaging
         run: pyinstaller fileconv.spec --noconfirm --clean --distpath ../dist --workpath ../build
-      - name: 실행 파일 동작 확인
-        run: dist\FileConverter\fconv.exe list
+      - name: 실행 파일로 실제 변환해 보기 (ffmpeg·PDF·한글 글꼴이 잘 묶였는지)
+        shell: pwsh
+        run: |
+          $fconv = "dist\FileConverter\fconv.exe"
+          mkdir smoke | Out-Null
+          python -c "from PIL import Image; Image.new('RGB',(64,64),'red').save('smoke/사진.png')"
+          python -c "import pathlib; pathlib.Path('smoke/메모.md').write_text('# 한글 제목\n\n본문', encoding='utf-8')"
+          python -c "import imageio_ffmpeg, subprocess; subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=d=1', '-f', 'lavfi', '-i', 'testsrc=d=1', '-shortest', 'smoke/영상.mp4'], check=True)"
+          & $fconv list
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $fconv convert smoke\사진.png -t pdf
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $fconv convert smoke\메모.md -t pdf
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $fconv convert smoke\영상.mp4 -t mp3
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $fconv convert smoke\사진.pdf -t png
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem smoke
       - uses: actions/upload-artifact@v4
         with:
           name: FileConverter-windows

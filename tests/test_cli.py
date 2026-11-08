@@ -31,3 +31,9 @@ def test_dry_run(korean_csv):
     result = runner.invoke(app, ["convert", str(korean_csv), "-t", "xlsx", "--dry-run"])
     assert result.exit_code == 0 and "text-to-excel" in result.output
     assert not korean_csv.with_suffix(".xlsx").exists()
+
+
+def test_doctor():
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "ffmpeg" in result.output and "사용 가능" in result.output
