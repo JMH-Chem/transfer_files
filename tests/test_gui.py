@@ -66,3 +66,17 @@ def test_gui_text_to_pdf_in_worker_thread(qapp, tmp_path):
     wait(qapp, w)
     assert (tmp_path / "메모.pdf").stat().st_size > 1000
     w.close()
+
+
+def test_gui_start_disabled_for_unavailable_converter(qapp, monkeypatch):
+    from fileconv.core.registry import get
+    from fileconv.gui.main_window import MainWindow
+
+    conv = get("hwp-to-pdf")
+    monkeypatch.setattr(type(conv), "is_available", lambda self: (False, "한컴오피스 없음"))
+    w = MainWindow()
+    w.select_converter("hwp-to-pdf")
+    assert not w.start_btn.isEnabled() and "한컴오피스" in w.start_btn.toolTip()
+    w.select_converter("images-to-pdf")
+    assert w.start_btn.isEnabled()
+    w.close()

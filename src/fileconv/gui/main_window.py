@@ -283,6 +283,9 @@ class MainWindow(QMainWindow):
         if not ok:
             text += f"<br><span style='color:#c0392b'>사용 불가: {why}</span>"
         self.desc_label.setText(text)
+        if self.worker is None:  # 쓸 수 없는 변환이면 시작 버튼을 막고 이유를 보여준다
+            self.start_btn.setEnabled(ok)
+            self.start_btn.setToolTip("" if ok else why)
         self.target_combo.clear()
         self.target_combo.addItems(sorted(conv.outputs))
         if conv.default_output in conv.outputs:
@@ -436,7 +439,8 @@ class MainWindow(QMainWindow):
             self._log("취소하는 중…")
 
     def _set_running(self, running: bool) -> None:
-        self.start_btn.setEnabled(not running)
+        available = self.converter is not None and self.converter.is_available()[0]
+        self.start_btn.setEnabled(not running and available)
         self.cancel_btn.setEnabled(running)
         self.tree.setEnabled(not running)
         self.file_list.setEnabled(not running)
