@@ -58,8 +58,9 @@ def test_bracket_names_are_shown_literally(tmp_path):
 
 def test_markup_like_text_does_not_crash(tmp_path):
     wide = {"COLUMNS": "400"}
-    result = runner.invoke(app, ["convert", str(tmp_path / "없는[/red]파일.png"), "-t", "jpg"], env=wide)
-    assert result.exit_code == 2, result.output
+    # 폴더 경로를 붙이지 않고 글자 그대로 넘긴다: Windows 에서는 '/' 가 폴더 구분자라 경로로 만들면 모양이 바뀐다
+    result = runner.invoke(app, ["convert", "없는[/red]파일.png", "-t", "jpg"], env=wide)
+    assert result.exit_code == 2, result.output  # MarkupError 로 죽지 않고 '파일 없음' 안내
     assert "없는[/red]파일.png" in result.output
     result = runner.invoke(app, ["info", "없는[/b]변환기"], env=wide)
     assert result.exit_code == 1 and "없는[/b]변환기" in result.output
