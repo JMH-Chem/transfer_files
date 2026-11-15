@@ -204,6 +204,8 @@ def _run_one(index: int, task: Task, on_progress: ProgressCb | None, cancel: Can
     use_temp = not conv.multi_output
     final = task.output
     temp = final.with_name(f"{final.stem}.fconv-part{final.suffix}") if use_temp else final
+    job: Job | None = None
+    succeeded = False
     try:
         ok, why = conv.is_available()
         if not ok:
@@ -223,6 +225,7 @@ def _run_one(index: int, task: Task, on_progress: ProgressCb | None, cancel: Can
             os.replace(temp, final)
             outputs = [final if Path(o) == temp else Path(o) for o in outputs]
         result.outputs = [Path(o) for o in outputs]
+        succeeded = True
         if on_progress:
             on_progress(index, 1.0)
     except Cancelled as exc:
@@ -237,9 +240,12 @@ def _run_one(index: int, task: Task, on_progress: ProgressCb | None, cancel: Can
         log.debug("변환 실패\n%s", traceback.format_exc())
         result.error = f"예상치 못한 오류 ({type(exc).__name__}): {exc}"
     finally:
-        if use_temp and temp.exists():
+        leftovers = [temp] if use_temp else []
+        if not succeeded and job is not None:
+            leftovers += job.created  # 여러 파일을 만드는 변환이 도중에 멈췄으면 이미 만든 것도 지운다
+        for path in leftovers:
             try:
-                temp.unlink()
+                path.unlink(missing_ok=True)
             except OSError:
                 pass
         result.seconds = time.perf_counter() - started

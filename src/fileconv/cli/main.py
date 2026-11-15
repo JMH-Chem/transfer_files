@@ -8,6 +8,7 @@ from typing import List, Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
@@ -26,6 +27,10 @@ app = typer.Typer(
 )
 console = Console()
 err_console = Console(stderr=True)
+
+# 파일 이름·오류 메시지처럼 바깥에서 온 글자는 반드시 escape() 로 감싼다.
+# 그러지 않으면 'Movie [x264].mkv' 의 [x264] 가 화면 꾸밈 명령으로 해석되어 사라지거나, '[/red]' 에서 프로그램이 죽는다.
+MANY_TASKS = 10  # 작업이 이보다 많으면 파일마다 진행 막대를 그리지 않고 전체 막대 하나만 쓴다
 
 
 def _version(value: bool) -> None:
@@ -49,9 +54,9 @@ def list_cmd(
     if source:
         targets = targets_for(source)
         if not targets:
-            err_console.print(f"[red].{norm_ext(source)} 파일은 지원하지 않습니다[/red]")
+            err_console.print(f"[red].{escape(norm_ext(source))} 파일은 지원하지 않습니다[/red]")
             raise typer.Exit(1)
-        table = Table(title=f".{norm_ext(source)} 파일을 바꿀 수 있는 형식")
+        table = Table(title=f".{escape(norm_ext(source))} 파일을 바꿀 수 있는 형식")
         table.add_column("출력 형식", style="bold cyan")
         table.add_column("변환기")
         for ext, convs in targets.items():
@@ -74,7 +79,7 @@ def list_cmd(
             " ".join(sorted(conv.inputs)),
             " ".join(sorted(conv.outputs)),
             "O" if conv.can_merge else "",
-            "[green]사용 가능[/green]" if ok else f"[red]사용 불가[/red]\n[dim]{why}[/dim]",
+            "[green]사용 가능[/green]" if ok else f"[red]사용 불가[/red]\n[dim]{escape(why)}[/dim]",
         )
     console.print(table)
     console.print("[dim]옵션 보기: fconv info <이름>   예) fconv info to-audio[/dim]")
@@ -86,7 +91,7 @@ def info_cmd(name: str = typer.Argument(..., help="변환기 이름 (fconv list 
     try:
         conv = get(name)
     except ConvertError as exc:
-        err_console.print(f"[red]{exc}[/red]")
+        err_console.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(1)
     ok, why = conv.is_available()
     console.print(f"[bold]{conv.title}[/bold] ({conv.name}) — {CATEGORIES.get(conv.category, conv.category)}")
@@ -96,7 +101,7 @@ def info_cmd(name: str = typer.Argument(..., help="변환기 이름 (fconv list 
     if conv.can_merge:
         console.print("여러 파일 합치기: [bold]--merge[/bold] 지원")
     if not ok:
-        console.print(f"[red]사용 불가: {why}[/red]")
+        console.print(f"[red]사용 불가: {escape(why)}[/red]")
     if conv.options:
         table = Table(title="옵션 ( -O 이름=값 )")
         table.add_column("이름", style="bold cyan")
@@ -139,18 +144,20 @@ def convert_cmd(
             # 모두 지원하지 않는 형식이면 첫 파일로 자세한 이유(가능한 형식 목록)를 보여준다
             engine.plan(skipped[:1], to, using=using)
         for path in skipped:
-            err_console.print(f"[yellow]건너뜀[/yellow] {path.name} (.{to} 로 바꿀 수 없는 형식)")
+            err_console.print(f"[yellow]건너뜀[/yellow] {escape(path.name)} (.{escape(to)} 로 바꿀 수 없는 형식)")
         tasks = engine.plan(files, to, output=output, merge=merge, using=using, options=options, overwrite=overwrite)
     except ConvertError as exc:
-        err_console.print(f"[red]오류:[/red] {exc}")
+        err_console.print(f"[red]오류:[/red] {escape(str(exc))}")
         raise typer.Exit(2)
 
     if dry_run:
         for task in tasks:
-            console.print(f"[cyan]{task.converter.name}[/cyan]  {task.label}  [dim]({task.output})[/dim]")
+            console.print(f"[cyan]{task.converter.name}[/cyan]  {escape(task.label)}  [dim]({escape(str(task.output))})[/dim]")
         return
 
     failed = 0
+    total = len(tasks)
+    many = total > MANY_TASKS
     with Progress(
         TextColumn("{task.description}"),
         BarColumn(),
@@ -159,35 +166,50 @@ def convert_cmd(
         console=console,
         transient=False,
     ) as progress:
-        bars = [progress.add_task(t.label, total=1.0, start=False) for t in tasks]
+        if many:  # 파일이 많으면 막대 하나로 전체 진행만 보여준다 (막대 수십 개가 화면을 덮지 않게)
+            overall = progress.add_task(f"0/{total}", total=float(total))
+            bars = []
+        else:
+            bars = [progress.add_task(escape(t.label), total=1.0, start=False) for t in tasks]
 
-        def on_start(i: int, _task: engine.Task) -> None:
-            progress.start_task(bars[i])
+        def on_start(i: int, task: engine.Task) -> None:
+            if many:
+                progress.update(overall, description=f"{i + 1}/{total}  {escape(task.label)}")
+            else:
+                progress.start_task(bars[i])
 
         def on_progress(i: int, fraction: float) -> None:
-            progress.update(bars[i], completed=fraction)
+            if many:
+                progress.update(overall, completed=i + fraction)
+            else:
+                progress.update(bars[i], completed=fraction)
 
         def on_done(i: int, result: engine.TaskResult) -> None:
             nonlocal failed
-            if result.ok:
+            if not result.ok:
+                failed += 1
+            if many:
+                progress.update(overall, completed=float(i + 1))
+            elif result.ok:
                 progress.update(bars[i], completed=1.0)
             else:
-                failed += 1
-                progress.update(bars[i], description=f"[red]✗[/red] {result.task.label}")
+                progress.update(bars[i], description=f"[red]✗[/red] {escape(result.task.label)}")
 
         try:
             results = engine.run(tasks, on_start=on_start, on_progress=on_progress, on_done=on_done)
         except KeyboardInterrupt:
             err_console.print("[yellow]중단했습니다[/yellow]")
             raise typer.Exit(130)
+        if many:
+            progress.update(overall, description=f"{total}/{total}")
 
     for result in results:
         if result.ok:
             for out in result.outputs:
                 size = human_size(out.stat().st_size) if out.exists() else "?"
-                console.print(f"[green]✓[/green] {out}  [dim]{size}, {result.seconds:.1f}초[/dim]")
+                console.print(f"[green]✓[/green] {escape(str(out))}  [dim]{size}, {result.seconds:.1f}초[/dim]")
         else:
-            err_console.print(f"[red]✗ {result.task.label}[/red]\n  {result.error}")
+            err_console.print(f"[red]✗ {escape(result.task.label)}[/red]\n  {escape(result.error or '실패')}")
     if len(results) > 1:
         console.print(f"완료 {len(results) - failed}개, 실패 {failed}개")
     if failed:
@@ -210,7 +232,7 @@ def doctor_cmd() -> None:
         return f"[green]✓[/green] {text}" if ok else f"[yellow]✗[/yellow] {text}"
 
     table.add_row("fileconv", __version__)
-    table.add_row("Python", f"{platform.python_version()} ({sys.executable})")
+    table.add_row("Python", f"{platform.python_version()} ({escape(sys.executable)})")
     table.add_row("운영체제", f"{platform.system()} {platform.release()}")
     ffmpeg = find_ffmpeg()
     version = ""
@@ -221,9 +243,10 @@ def doctor_cmd() -> None:
             version = out.split("\n", 1)[0]
         except Exception as exc:  # noqa: BLE001
             version = f"실행 실패: {exc}"
-    table.add_row("ffmpeg", mark(bool(ffmpeg), f"{version}\n[dim]{ffmpeg}[/dim]" if ffmpeg else "없음"))
+    version, ffmpeg_path = escape(version), escape(ffmpeg or "")
+    table.add_row("ffmpeg", mark(bool(ffmpeg), f"{version}\n[dim]{ffmpeg_path}[/dim]" if ffmpeg else "없음"))
     soffice = find_soffice()
-    table.add_row("LibreOffice", mark(bool(soffice), soffice or "없음 (Word→PDF 에 MS Office 가 없을 때 필요)"))
+    table.add_row("LibreOffice", mark(bool(soffice), escape(soffice or "") or "없음 (Word→PDF 에 MS Office 가 없을 때 필요)"))
     if IS_WINDOWS:
         for app_name in ("Word", "Excel", "PowerPoint"):
             table.add_row(f"MS {app_name}", mark(has_ms_office(app_name), "설치됨" if has_ms_office(app_name) else "없음"))
@@ -232,14 +255,14 @@ def doctor_cmd() -> None:
         from ..converters.document import _default_font, _ensure_qt
 
         _ensure_qt()
-        table.add_row("PDF 글꼴", mark(True, _default_font()))
+        table.add_row("PDF 글꼴", mark(True, escape(_default_font())))
     except Exception as exc:  # noqa: BLE001
-        table.add_row("PDF 글꼴", mark(False, f"확인 실패: {exc}"))
+        table.add_row("PDF 글꼴", mark(False, f"확인 실패: {escape(str(exc))}"))
     convs = all_converters()
     unavailable = [(c, c.is_available()[1]) for c in convs if not c.is_available()[0]]
     table.add_row("변환", f"{len(convs) - len(unavailable)}/{len(convs)}개 사용 가능")
     for conv, why in unavailable:
-        table.add_row("", f"[yellow]사용 불가[/yellow] {conv.title}: [dim]{why}[/dim]")
+        table.add_row("", f"[yellow]사용 불가[/yellow] {conv.title}: [dim]{escape(why)}[/dim]")
     console.print(table)
 
 
@@ -284,9 +307,9 @@ def sendto_cmd(remove: bool = typer.Option(False, "--remove", help="'보내기' 
         shortcut.Description = "fileconv 파일 변환기"
         shortcut.save()
     except Exception as exc:
-        err_console.print(f"[red]바로가기를 만들 수 없습니다: {exc}[/red]")
+        err_console.print(f"[red]바로가기를 만들 수 없습니다: {escape(str(exc))}[/red]")
         raise typer.Exit(1)
-    console.print(f"[green]완료![/green] 탐색기에서 파일 선택 → 오른쪽 클릭 → 보내기 → '파일 변환기'\n[dim]{link}[/dim]")
+    console.print(f"[green]완료![/green] 탐색기에서 파일 선택 → 오른쪽 클릭 → 보내기 → '파일 변환기'\n[dim]{escape(str(link))}[/dim]")
 
 
 def _parse_opts(items: list[str]) -> dict[str, str]:

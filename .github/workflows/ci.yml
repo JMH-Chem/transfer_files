@@ -57,6 +57,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           & $fconv convert smoke\사진.pdf -t png
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          # 암호 걸기(AES-256) → 그 암호로 다시 열기: 암호화 라이브러리가 exe 에 들어갔는지 확인
+          & $fconv convert smoke\사진.pdf -t pdf -O new_password=1234 -o smoke\잠금.pdf
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $fconv convert smoke\잠금.pdf -t pdf -O password=1234 -o smoke\풀림.pdf
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-ChildItem smoke
       - uses: actions/upload-artifact@v4
         with:

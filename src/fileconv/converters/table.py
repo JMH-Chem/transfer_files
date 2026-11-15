@@ -13,7 +13,7 @@ import pandas as pd
 from ..core.base import Converter, Job, Option
 from ..core.errors import ConvertError
 from ..core.registry import register
-from ..core.utils import detect_encoding, safe_sheet_name
+from ..core.utils import read_text_auto, safe_sheet_name, unique_path
 
 TEXT_EXTS = {"csv", "tsv", "txt", "json"}
 
@@ -22,7 +22,13 @@ EXCEL_EXTS = {"xlsx", "xlsm"}
 
 DELIMITERS = {"쉼표": ",", "탭": "\t", "세미콜론": ";", "세로선": "|", "공백": r"\s+", "없음": None}
 ENCODING_CHOICES = ("자동", "utf-8", "cp949", "euc-kr", "utf-16")
-_LEADING_ZERO = re.compile(r"^[+-]?0\d")
+_LEADING_ZERO = re.compile(r"^-?0\d")
+# 숫자로 바꿔도 되는 모양: 123 / -1,234,567 / 0.5  (1E5 같은 지수 꼴, +82… 같은 전화번호는 글자로 둔다)
+_NUMBER_RE = re.compile(r"^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$")
+EXCEL_MAX_DIGITS = 15        # 엑셀은 숫자를 15자리까지만 정확히 기억한다 (16자리 카드번호는 끝자리가 0 이 됨)
+EXCEL_PLAIN_FROM = 10 ** 11  # 이보다 큰 정수는 엑셀이 8.8E+12 처럼 보여 주므로 표시 형식을 '0' 으로 지정
+EXCEL_MAX_ROWS = 1_048_576   # 시트 하나에 들어가는 최대 행 수
+EXCEL_MAX_COLS = 16_384
 
 DELIM_OPT = Option("delimiter", "choice", "자동", "구분자", "열을 나누는 문자. 자동 = 파일을 보고 추측",
                    choices=("자동", *DELIMITERS))
@@ -99,20 +105,25 @@ def rows_to_frame(rows: list[list[str]], header: bool) -> pd.DataFrame:
 
 
 def _smart_numbers(df: pd.DataFrame) -> pd.DataFrame:
-    """글자로 읽은 표에서 '진짜 숫자' 열만 숫자로 바꾼다 (0으로 시작하는 코드 값 등은 보존)."""
+    """글자로 읽은 표에서 '진짜 숫자' 열만 숫자로 바꾼다.
+
+    열의 모든 값이 숫자 모양일 때만 바꾸고, 아래 경우는 글자 그대로 둔다 (엑셀에서 값이 망가지지 않게):
+    - 0 으로 시작하는 값이 있음 (우편번호 01234, 전화번호)
+    - 16자리 이상인 값이 있음 (카드번호: 엑셀 숫자는 15자리까지만 정확)
+    """
     for col in df.columns:
         series = df[col]
         values = series.dropna().astype(str).str.strip()
         values = values[values != ""]
-        if values.empty or values.str.match(_LEADING_ZERO).any():
+        if values.empty or not values.str.match(_NUMBER_RE).all() or values.str.match(_LEADING_ZERO).any():
             continue
-        cleaned = values.str.replace(",", "", regex=False) if values.str.match(r"^-?\d{1,3}(,\d{3})+(\.\d+)?$").all() else values
-        converted = pd.to_numeric(cleaned, errors="coerce")
-        if converted.notna().all():
-            full = pd.to_numeric(series.astype(str).str.strip().str.replace(",", "", regex=False), errors="coerce")
-            if (full.dropna() == full.dropna().round()).all() and full.abs().max() < 2**53:
-                full = full.astype("Int64")
-            df[col] = full
+        digits = values.str.replace(r"\D", "", regex=True).str.lstrip("0")
+        if (digits.str.len() > EXCEL_MAX_DIGITS).any():
+            continue
+        full = pd.to_numeric(series.astype(str).str.strip().str.replace(",", "", regex=False), errors="coerce")
+        if (full.dropna() == full.dropna().round()).all():
+            full = full.astype("Int64")
+        df[col] = full
     return df
 
 
@@ -120,13 +131,7 @@ def read_text_table(path: Path, job: Job) -> dict[str, pd.DataFrame]:
     """파일 하나를 읽어 {시트이름 후보: 표}. JSON 은 표가 여러 개일 수 있다."""
     ext = path.suffix.lower().lstrip(".")
     enc_choice = job.opt("encoding", "자동")
-    encoding = detect_encoding(path) if enc_choice == "자동" else enc_choice
-    try:
-        text = path.read_text(encoding=encoding)
-    except UnicodeDecodeError as exc:
-        raise ConvertError(f"{path.name}: '{encoding}' 인코딩으로 읽을 수 없습니다. 인코딩 옵션을 바꿔보세요") from exc
-    if text.startswith("﻿"):
-        text = text[1:]
+    text = read_text_auto(path, None if enc_choice == "자동" else enc_choice)
 
     if ext == "json":
         return _read_json(path, text)
@@ -176,20 +181,63 @@ def _display_width(value) -> int:
     return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in longest)
 
 
+def _object_series(series: pd.Series, func) -> pd.Series:
+    """값마다 func 를 적용하되 값의 종류를 그대로 지킨다 (Series.map 은 정수 2 를 2.0 으로 바꿔 버릴 수 있다)."""
+    return pd.Series([func(v) for v in series], index=series.index, dtype=object)
+
+
+def _writable(df: pd.DataFrame, for_excel: bool) -> pd.DataFrame:
+    """파일에 쓸 수 있는 값으로 다듬는다.
+
+    - 목록·사전 값(JSON 안의 배열/객체)은 JSON 글자로: ["x", "y"]
+    - 엑셀용이면 엑셀이 받지 못하는 제어 문자를 지운다 (그대로 두면 파일 전체가 저장 실패)
+    """
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+    def fix(value):
+        if isinstance(value, (list, dict)):
+            value = json.dumps(value, ensure_ascii=False)
+        if for_excel and isinstance(value, str):
+            value = ILLEGAL_CHARACTERS_RE.sub("", value)
+        return value
+
+    out = df.copy()
+    for col in out.columns:
+        if not pd.api.types.is_numeric_dtype(out[col]) and not pd.api.types.is_datetime64_any_dtype(out[col]):
+            out[col] = _object_series(out[col], fix)
+    if for_excel:
+        out.columns = [fix(c) for c in out.columns]
+    return out
+
+
+def _split_for_sheets(name: str, df: pd.DataFrame, header: bool) -> list[tuple[str, pd.DataFrame]]:
+    """시트 하나에 다 안 들어가는 표는 '이름', '이름_2', … 로 나눈다."""
+    if len(df.columns) > EXCEL_MAX_COLS:
+        raise ConvertError(f"열이 너무 많아 엑셀에 넣을 수 없습니다 ({len(df.columns):,}열, 최대 {EXCEL_MAX_COLS:,}열)")
+    room = EXCEL_MAX_ROWS - (1 if header else 0)
+    if len(df) <= room:
+        return [(name, df)]
+    return [(name if i == 0 else f"{name}_{i // room + 1}", df.iloc[i:i + room]) for i in range(0, len(df), room)]
+
+
 def write_excel(sheets: list[tuple[str, pd.DataFrame]], output: Path, header: bool = True) -> None:
     from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     used: set[str] = set()
+    pieces = [piece for raw_name, df in sheets for piece in _split_for_sheets(raw_name, df, header)]
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        for raw_name, df in sheets:
+        for raw_name, df in pieces:
+            df = _writable(df, for_excel=True)
             name = safe_sheet_name(raw_name, used)
             df.to_excel(writer, sheet_name=name, index=False, header=header)
             ws = writer.sheets[name]
-            for row in ws.iter_rows():  # '=' 로 시작하는 글자가 엑셀 수식으로 저장되지 않게 (수식 주입 방지)
+            for row in ws.iter_rows():
                 for cell in row:
-                    if cell.data_type == "f":
+                    if cell.data_type == "f":  # '=' 로 시작하는 글자가 엑셀 수식으로 저장되지 않게 (수식 주입 방지)
                         cell.data_type = "s"
+                    elif cell.data_type == "n" and isinstance(cell.value, int) and abs(cell.value) >= EXCEL_PLAIN_FROM:
+                        cell.number_format = "0"  # 13자리 바코드가 8.80123E+12 로 보이지 않게
             for idx, col in enumerate(df.columns, start=1):
                 sample = df[col].head(500).tolist()
                 width = max([_display_width(col) if header else 0] + [_display_width(v) for v in sample])
@@ -202,12 +250,46 @@ def write_excel(sheets: list[tuple[str, pd.DataFrame]], output: Path, header: bo
                     cell.fill = fill
 
 
-def write_text_table(df: pd.DataFrame, output: Path, fmt: str, encoding: str) -> None:
+def _tidy_dates(df: pd.DataFrame, sep: str) -> pd.DataFrame:
+    """엑셀에서 읽은 날짜 칸을 보기 좋은 글자로 바꾼다.
+
+    시각이 모두 0시인 열은 날짜만(2024-03-01), 아니면 날짜와 시각(2024-03-01 14:30:00).
+    그대로 두면 날짜만 적힌 칸도 전부 '2024-03-01 00:00:00' 으로 나온다.
+    """
+    import datetime as dt
+
+    out = df.copy()
+    for col in out.columns:
+        stamps = [v for v in out[col] if isinstance(v, dt.datetime)]
+        if not stamps:
+            continue
+        date_only = all(v.time() == dt.time(0, 0) for v in stamps)
+
+        def show(value, date_only=date_only):
+            if isinstance(value, dt.datetime):
+                if date_only:
+                    return value.date().isoformat()
+                return value.isoformat(sep=sep, timespec="seconds" if value.microsecond == 0 else "milliseconds")
+            if isinstance(value, (dt.date, dt.time)):
+                return value.isoformat()
+            return value
+
+        out[col] = _object_series(out[col], show)
+    return out
+
+
+def write_text_table(df: pd.DataFrame, output: Path, fmt: str, encoding: str, header: bool = True) -> None:
     if fmt == "json":
-        records = json.loads(df.to_json(orient="records", force_ascii=False, date_format="iso"))
+        records = json.loads(_tidy_dates(df, "T").to_json(orient="records", force_ascii=False, date_format="iso"))
         output.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
         return
-    df.to_csv(output, sep="\t" if fmt == "tsv" else ",", index=False, encoding=encoding, lineterminator="\r\n")
+    table = _writable(_tidy_dates(df, " "), for_excel=False)
+    try:
+        table.to_csv(output, sep="\t" if fmt == "tsv" else ",", index=False, header=header,
+                     encoding=encoding, lineterminator="\r\n")
+    except UnicodeEncodeError as exc:
+        raise ConvertError(f"'{encoding}' 로 저장할 수 없는 글자가 있습니다 ({exc.object[exc.start:exc.end]!r}). "
+                           "저장 인코딩을 utf-8-sig 로 바꾸세요") from exc
 
 
 # ---------------------------------------------------------------- 변환기
@@ -257,13 +339,14 @@ class ExcelToText(Converter):
     )
 
     def convert(self, job: Job) -> list[Path]:
-        from ..core.utils import unique_path
-
         src = job.inputs[0]
         try:
             book = pd.read_excel(src, sheet_name=None, dtype=object, engine="openpyxl")
         except Exception as exc:
             raise ConvertError(f"엑셀 파일을 열 수 없습니다: {src.name} ({exc})") from exc
+        for sheet in book.values():  # 제목이 빈 열은 pandas 가 'Unnamed: 3' 이라고 붙인다 → '열4'
+            sheet.columns = [re.sub(r"^Unnamed: (\d+)$", lambda m: f"열{int(m.group(1)) + 1}", str(c))
+                             for c in sheet.columns]
         job.progress(0.5)
         names = list(book)
         choice = str(job.opt("sheet", "")).strip()
@@ -285,7 +368,7 @@ class ExcelToText(Converter):
             else:
                 safe = re.sub(r'[\\/:*?"<>|]', "_", name)
                 dest = unique_path(job.output.with_name(f"{job.output.stem}_{safe}{job.output.suffix}"), job.overwrite)
-            write_text_table(book[name], dest, job.target, job.opt("out_encoding", "utf-8-sig"))
+            write_text_table(book[name], job.new_file(dest), job.target, job.opt("out_encoding", "utf-8-sig"))
             outputs.append(dest)
         return outputs
 
@@ -310,12 +393,6 @@ class TableConvert(Converter):
         tables = read_text_table(job.inputs[0], job)
         df = pd.concat(list(tables.values()), ignore_index=True) if len(tables) > 1 else next(iter(tables.values()))
         job.progress(0.6)
-        if not job.opt("header", True) and job.target != "json":
-            df.to_csv(job.output, sep="\t" if job.target == "tsv" else ",", index=False, header=False,
-                      encoding=job.opt("out_encoding", "utf-8-sig"), lineterminator="\r\n")
-        else:
-            try:
-                write_text_table(df, job.output, job.target, job.opt("out_encoding", "utf-8-sig"))
-            except UnicodeEncodeError as exc:
-                raise ConvertError("cp949 로 저장할 수 없는 글자가 있습니다. 저장 인코딩을 utf-8-sig 로 바꾸세요") from exc
+        write_text_table(df, job.output, job.target, job.opt("out_encoding", "utf-8-sig"),
+                         header=bool(job.opt("header", True)))
         return [job.output]

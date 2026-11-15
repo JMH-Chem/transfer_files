@@ -119,3 +119,89 @@ def test_split_empty_pdf_reports_error(tmp_path):
         PdfWriter().write(fh)
     results = engine.run(engine.plan([empty], "pdf", using="pdf-split"))
     assert not results[0].ok and "페이지가 없는" in results[0].error
+
+
+# ---------------------------------------------------------------- 3차 검토에서 찾은 문제
+
+@pytest.fixture
+def aes_pdfs(pdf_file, tmp_path):
+    """요즘 PDF 프로그램이 쓰는 AES 방식으로 잠근 PDF (pikepdf 는 img2pdf 와 함께 설치됨)."""
+    import pikepdf
+
+    paths = {}
+    with pikepdf.open(pdf_file) as pdf:
+        for name, level in (("aes256", 6), ("aes128", 4)):
+            paths[name] = tmp_path / f"{name}.pdf"
+            pdf.save(paths[name], encryption=pikepdf.Encryption(user="1234", owner="1234", R=level))
+    return paths
+
+
+@pytest.mark.parametrize("kind", ["aes256", "aes128"])
+def test_aes_encrypted_pdf_opens_with_password(aes_pdfs, kind):
+    from fileconv.core import engine
+
+    locked = aes_pdfs[kind]
+    [unlocked] = convert([locked], "pdf", options={"password": "1234"})
+    reader = PdfReader(unlocked)
+    assert not reader.is_encrypted and len(reader.pages) == 4
+    outs = convert([locked], "pdf", using="pdf-split", options={"password": "1234", "every": "2"})
+    assert len(outs) == 2
+    [small] = convert([locked], "pdf", using="pdf-compress", options={"password": "1234"})
+    assert small.exists()
+    results = engine.run(engine.plan([locked], "pdf", options={"password": "wrong"}))
+    assert "암호가 걸린" in results[0].error
+
+
+def test_new_password_is_aes256(pdf_file, tmp_path):
+    import pikepdf
+
+    [locked] = convert([pdf_file], "pdf", options={"new_password": "abcd"}, output=tmp_path / "locked.pdf")
+    with pikepdf.open(locked, password="abcd") as pdf:
+        assert pdf.encryption.R == 6 and pdf.encryption.bits == 256  # 구식 RC4 가 아니라 AES-256
+
+
+def test_scanned_pdf_to_text_is_reported(pdf_file):
+    """글자가 없는(그림뿐인) PDF 를 텍스트로 바꾸면 빈 파일을 '성공'으로 내놓지 않는다."""
+    from fileconv.core import engine
+
+    results = engine.run(engine.plan([pdf_file], "txt"))
+    assert not results[0].ok and "글자가 들어 있지 않은" in results[0].error
+    assert not pdf_file.with_suffix(".txt").exists()
+
+
+def test_cancelled_multi_output_leaves_no_files(pdf_file):
+    """PDF → 이미지를 도중에 취소하면 이미 만든 쪽 이미지도 남기지 않는다."""
+    from fileconv.core import engine
+    from fileconv.core.base import CancelToken
+
+    token = CancelToken()
+    calls = []
+
+    def on_progress(_i, _f):
+        calls.append(1)
+        if len(calls) == 2:
+            token.cancel()
+
+    results = engine.run(engine.plan([pdf_file], "png"), on_progress=on_progress, cancel=token)
+    assert results[0].cancelled
+    assert not list(pdf_file.parent.glob("문서_p*.png"))
+
+
+def test_failed_split_leaves_no_files(pdf_file, monkeypatch):
+    from pypdf import PdfWriter
+
+    from fileconv.core import engine
+
+    original = PdfWriter.write
+    count = {"n": 0}
+
+    def flaky(self, stream):
+        count["n"] += 1
+        if count["n"] == 3:
+            raise OSError("디스크 오류 흉내")
+        return original(self, stream)
+
+    monkeypatch.setattr(PdfWriter, "write", flaky)
+    results = engine.run(engine.plan([pdf_file], "pdf", using="pdf-split"))
+    assert not results[0].ok
+    assert not list(pdf_file.parent.glob("문서_p*.pdf"))

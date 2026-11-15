@@ -19,6 +19,7 @@ dependencies = [
     "openpyxl>=3.1",
     "charset-normalizer>=3",
     "pypdf>=5",
+    "cryptography>=42",  # 암호 걸린 PDF(AES) 열기·걸기에 필요
     "pypdfium2>=4",
     "markdown>=3.5",
     "python-docx>=1.1",

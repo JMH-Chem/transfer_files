@@ -19,21 +19,32 @@ PAGES_OPT = Option("pages", "pages", None, "페이지", "예: 1-3,5,8- (비우�
 PASSWORD_OPT = Option("password", "str", "", "PDF 비밀번호", "암호가 걸린 PDF 일 때만")
 
 
+_NEED_CRYPTO = "암호가 걸린 PDF 를 다루려면 cryptography 패키지가 필요합니다 (pip install cryptography)"
+
+
 def open_pdf(path: Path, password: str = ""):
     from pypdf import PdfReader
-    from pypdf.errors import PdfReadError
+    from pypdf.errors import DependencyError, PdfReadError
 
     try:
         reader = PdfReader(path)
+        if reader.is_encrypted:
+            try:
+                ok = reader.decrypt(password or "")
+            except DependencyError:
+                raise
+            except Exception as exc:
+                raise ConvertError(f"{path.name}: 암호 해제 실패 ({exc})") from exc
+            if not ok:
+                raise ConvertError(f"{path.name}: 암호가 걸린 PDF 입니다. 'password' 옵션에 비밀번호를 입력하세요")
+        if len(reader.pages):
+            reader.pages[0].get_contents()  # 실제로 한 번 읽어 봐서 손상·암호 문제를 여기서 알린다
+    except ConvertError:
+        raise
+    except DependencyError as exc:
+        raise ConvertError(f"{path.name}: {_NEED_CRYPTO}") from exc
     except (PdfReadError, OSError, ValueError) as exc:
         raise ConvertError(f"PDF 를 열 수 없습니다: {path.name} ({exc})") from exc
-    if reader.is_encrypted:
-        try:
-            ok = reader.decrypt(password or "")
-        except Exception as exc:
-            raise ConvertError(f"{path.name}: 암호 해제 실패 ({exc})") from exc
-        if not ok:
-            raise ConvertError(f"{path.name}: 암호가 걸린 PDF 입니다. 'password' 옵션에 비밀번호를 입력하세요")
     return reader
 
 
@@ -50,10 +61,13 @@ def open_pdfium(path: Path, password: str = ""):
 
 
 def encrypt_writer(writer, password: str) -> None:
+    """AES-256 으로 열기 암호를 건다. (약한 구식 방식 RC4 로 조용히 바꾸지 않는다)"""
+    from pypdf.errors import DependencyError
+
     try:
         writer.encrypt(user_password=password, owner_password=None, algorithm="AES-256")
-    except Exception:  # AES 에 필요한 cryptography 패키지가 없으면 RC4 로
-        writer.encrypt(user_password=password, owner_password=None, algorithm="RC4-128")
+    except DependencyError as exc:
+        raise ConvertError(_NEED_CRYPTO) from exc
 
 
 # ---------------------------------------------------------------- PDF → PDF
@@ -133,7 +147,7 @@ class PdfSplit(Converter):
                 writer.add_page(reader.pages[index])
             first, last = chunk[0] + 1, chunk[-1] + 1
             label = f"{first:0{width}d}" if first == last else f"{first:0{width}d}-{last:0{width}d}"
-            dest = unique_path(job.output.with_name(f"{job.output.stem}_p{label}.pdf"), job.overwrite)
+            dest = job.new_file(unique_path(job.output.with_name(f"{job.output.stem}_p{label}.pdf"), job.overwrite))
             with open(dest, "wb") as fh:
                 writer.write(fh)
             outputs.append(dest)
@@ -243,7 +257,7 @@ class PdfToImage(Converter):
                         job.overwrite,
                     )
                 kwargs = {"quality": job.opt("quality", 90)} if fmt in ("JPEG", "WEBP") else {}
-                image.save(dest, fmt, **kwargs)
+                image.save(job.new_file(dest), fmt, **kwargs)
                 outputs.append(dest)
                 job.progress((n + 1) / len(indices))
             return outputs
@@ -273,12 +287,14 @@ class PdfToText(Converter):
         try:
             indices = parse_pages(job.opt("pages"), len(pdf))
             parts: list[str] = []
+            has_text = False
             for n, index in enumerate(indices):
                 page = pdf[index]
                 textpage = page.get_textpage()
                 text = textpage.get_text_bounded().replace("\r\n", "\n").replace("\r", "\n")
                 textpage.close()
                 page.close()
+                has_text = has_text or bool(text.strip())
                 if job.opt("page_marks", True):
                     parts.append(f"=== {index + 1}쪽 ===\n{text.strip()}\n")
                 else:
@@ -286,6 +302,9 @@ class PdfToText(Converter):
                 job.progress((n + 1) / len(indices))
         finally:
             pdf.close()
+        if not has_text:  # 빈 텍스트 파일을 '성공'으로 내놓지 않는다
+            raise ConvertError(f"글자가 들어 있지 않은 PDF 입니다: {src.name} — 스캔한(사진으로 된) 문서로 보입니다. "
+                               "글자를 뽑으려면 문자 인식(OCR)이 필요합니다")
         job.output.write_text("\n".join(parts), encoding="utf-8")
         return [job.output]
 
@@ -491,10 +510,10 @@ class MarkdownToHtml(Converter):
     def convert(self, job: Job) -> list[Path]:
         import markdown
 
-        from ..core.utils import detect_encoding
+        from ..core.utils import read_text_auto
 
         src = job.inputs[0]
-        text = src.read_text(encoding=detect_encoding(src))
+        text = read_text_auto(src)
         md = markdown.Markdown(extensions=["extra", "toc", "sane_lists", "nl2br"])
         body = md.convert(text)
         title = job.opt("title") or next(
@@ -626,10 +645,10 @@ class TextToPdf(Converter):
         from PySide6.QtCore import QMarginsF
         from PySide6.QtGui import QFont, QPageLayout, QPageSize, QPdfWriter, QTextDocument
 
-        from ..core.utils import detect_encoding
+        from ..core.utils import read_text_auto
 
         src = job.inputs[0]
-        text = src.read_text(encoding=detect_encoding(src))
+        text = read_text_auto(src)
         ext = src.suffix.lower().lstrip(".")
         size = job.opt("font_size", 11)
         family = job.opt("font") or _default_font()

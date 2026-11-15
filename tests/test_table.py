@@ -117,3 +117,96 @@ def test_huge_cell(tmp_path):
     assert len(json.loads(js.read_text(encoding="utf-8"))[0]["a"]) == 200_000
     [x] = convert([f], "xlsx")  # 엑셀 한 칸의 최대 글자 수(32767)까지만 들어가지만 변환은 성공
     assert len(openpyxl.load_workbook(x).active["A2"].value) == 32767
+
+
+# ---------------------------------------------------------------- 3차 검토에서 찾은 문제
+
+def _rows(xlsx):
+    return [[c.value for c in r] for r in openpyxl.load_workbook(xlsx).active.iter_rows()]
+
+
+def test_control_characters_do_not_break_excel(tmp_path):
+    f = tmp_path / "ctrl.csv"
+    f.write_text("이름,메모\n홍길동,줄\x0b바꿈\n김철수,정상\x1f\n", encoding="utf-8")
+    [x] = convert([f], "xlsx")
+    assert _rows(x) == [["이름", "메모"], ["홍길동", "줄바꿈"], ["김철수", "정상"]]
+
+
+def test_long_digit_strings_are_not_damaged(tmp_path):
+    f = tmp_path / "ids.csv"
+    f.write_text("카드번호,바코드,코드,전화\n1234567812345678,8801234567890,1E5,+821012345678\n"
+                 "9999888877776666,8809876543210,2E3,+821098765432\n", encoding="utf-8")
+    [x] = convert([f], "xlsx")
+    ws = openpyxl.load_workbook(x).active
+    assert ws["A2"].value == "1234567812345678"  # 16자리: 엑셀 숫자는 15자리까지만 정확 → 글자로 둔다
+    assert ws["B2"].value == 8801234567890 and ws["B2"].number_format == "0"  # 지수 표기(8.8E+12)로 안 보이게
+    assert ws["C2"].value == "1E5"  # 코드가 100000 으로 바뀌면 안 됨
+    assert ws["D2"].value == "+821012345678"
+
+
+def test_mixed_plain_and_comma_numbers(tmp_path):
+    f = tmp_path / "money.csv"
+    f.write_text('품목,금액,비율\n가,500,0.5\n나,"1,200",1.25\n다,"98,765,432,100",-3\n', encoding="utf-8")
+    [x] = convert([f], "xlsx")
+    rows = _rows(x)
+    assert [r[1] for r in rows[1:]] == [500, 1200, 98765432100]
+    assert [r[2] for r in rows[1:]] == [0.5, 1.25, -3]
+
+
+def test_excel_dates_headers_and_integers_to_csv(tmp_path):
+    import datetime
+
+    book = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["날짜", "시각", "값", None, "수량"])
+    ws.append([datetime.date(2024, 3, 1), datetime.datetime(2024, 3, 1, 14, 30), 1.5, None, 3])
+    ws.append([datetime.date(2024, 3, 2), None, 2, None, 4])
+    wb.save(book)
+    [out] = convert([book], "csv")
+    lines = out.read_text(encoding="utf-8-sig").splitlines()
+    assert lines[0] == "날짜,시각,값,열4,수량"  # 빈 제목 열이 'Unnamed: 3' 이 아님
+    assert lines[1] == "2024-03-01,2024-03-01 14:30:00,1.5,,3"  # 날짜만 있는 열에 00:00:00 이 붙지 않음
+    assert lines[2] == "2024-03-02,,2,,4"  # 정수 2 가 2.0 으로 바뀌지 않음
+    [js] = convert([book], "json")
+    first = json.loads(js.read_text(encoding="utf-8"))[0]
+    assert first["날짜"] == "2024-03-01" and first["시각"] == "2024-03-01T14:30:00"
+
+
+def test_unencodable_text_gives_clear_error(tmp_path):
+    from fileconv.core import engine
+
+    book = tmp_path / "emoji.xlsx"
+    pd.DataFrame({"글": ["😀"]}).to_excel(book, index=False)
+    results = engine.run(engine.plan([book], "csv", options={"out_encoding": "cp949"}))
+    assert not results[0].ok and "utf-8-sig" in results[0].error and "예상치 못한" not in results[0].error
+
+
+def test_rows_beyond_excel_limit_go_to_extra_sheets(tmp_path, monkeypatch):
+    from fileconv.converters import table
+
+    monkeypatch.setattr(table, "EXCEL_MAX_ROWS", 4)  # 실제 한도(1,048,576) 대신 작은 값으로 같은 경로를 시험
+    f = tmp_path / "big.csv"
+    f.write_text("n\n" + "\n".join(str(i) for i in range(1, 8)) + "\n", encoding="utf-8")
+    [x] = convert([f], "xlsx")
+    wb = openpyxl.load_workbook(x)
+    assert wb.sheetnames == ["big", "big_2", "big_3"]
+    assert [[c.value for c in r] for r in wb["big_2"].iter_rows()] == [["n"], [4], [5], [6]]
+
+
+def test_encoding_fallback_when_korean_appears_late(tmp_path):
+    f = tmp_path / "late.csv"
+    f.write_bytes(b"a,b\n" + b"1,2\n" * 80000 + "홍길동,서울\n".encode("cp949"))  # 앞 256KB 는 영문·숫자뿐
+    [x] = convert([f], "csv", options={"out_encoding": "utf-8"})
+    assert x.read_text(encoding="utf-8").rstrip().endswith("홍길동,서울")
+
+
+def test_json_nested_values_are_written_as_json_text(tmp_path):
+    f = tmp_path / "nested.json"
+    f.write_text(json.dumps([{"이름": "가", "태그": ["x", "y"], "정보": {"a": [1, 2]}}], ensure_ascii=False), encoding="utf-8")
+    [x] = convert([f], "xlsx")
+    ws = openpyxl.load_workbook(x).active
+    header = [c.value for c in ws[1]]
+    assert ws.cell(2, header.index("태그") + 1).value == '["x", "y"]'
+    [c] = convert([f], "csv")
+    assert '"[""x"", ""y""]"' in c.read_text(encoding="utf-8-sig")

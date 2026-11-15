@@ -99,7 +99,8 @@ def safe_sheet_name(name: str, used: set[str]) -> str:
 
 def detect_encoding(path: Path, sample_size: int = 256 * 1024) -> str:
     """텍스트 파일 인코딩 추정. 한국어 환경에서 흔한 utf-8 / cp949 를 우선 판단한다."""
-    raw = path.read_bytes()[:sample_size]
+    with open(path, "rb") as fh:  # 큰 파일도 앞부분만 읽는다
+        raw = fh.read(sample_size)
     if raw.startswith(b"\xef\xbb\xbf"):
         return "utf-8-sig"
     if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
@@ -117,6 +118,29 @@ def detect_encoding(path: Path, sample_size: int = 256 * 1024) -> str:
 
     best = from_bytes(raw).best()
     return best.encoding if best else "utf-8"
+
+
+def read_text_auto(path: Path, encoding: str | None = None) -> str:
+    """텍스트 파일을 읽어 글자로 돌려준다 (맨 앞 BOM 은 뗀다).
+
+    encoding 을 주지 않으면 자동 감지한다. 감지는 파일 앞부분만 보므로, 앞쪽은 영문·숫자뿐이고
+    뒤쪽에 한글이 나오는 파일에서는 틀릴 수 있다 → 실제로 읽다가 실패하면 흔한 한글 인코딩으로 다시 시도한다.
+    """
+    if encoding:
+        try:
+            text = path.read_text(encoding=encoding)
+        except (UnicodeError, LookupError) as exc:
+            raise ConvertError(f"{path.name}: '{encoding}' 인코딩으로 읽을 수 없습니다. 인코딩 옵션을 바꿔보세요") from exc
+    else:
+        for candidate in dict.fromkeys([detect_encoding(path), "utf-8", "cp949"]):
+            try:
+                text = path.read_text(encoding=candidate)
+                break
+            except (UnicodeError, LookupError):
+                continue
+        else:
+            raise ConvertError(f"{path.name}: 글자 인코딩을 알 수 없습니다. '읽기 인코딩' 옵션을 직접 지정해 보세요")
+    return text.removeprefix("\ufeff")
 
 
 def human_size(n: int) -> str:

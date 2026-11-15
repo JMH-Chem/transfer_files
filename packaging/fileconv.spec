@@ -16,7 +16,7 @@ for pkg in ("pypdfium2", "pypdfium2_raw", "pillow_heif", "imageio_ffmpeg"):
 datas += collect_data_files("docx")  # python-docx 기본 템플릿
 hiddenimports += collect_submodules("markdown.extensions")  # 이름 문자열로 불러오는 확장
 hiddenimports += collect_submodules("fileconv")
-hiddenimports += ["olefile", "openpyxl", "charset_normalizer"]
+hiddenimports += ["olefile", "openpyxl", "charset_normalizer", "cryptography"]
 
 excludes = [
     "tkinter", "matplotlib", "IPython", "pytest",
