@@ -140,7 +140,9 @@ class ImagesToPdf(Converter):
             images.extend(_pdf_ready_pages(path))
             job.progress(0.8 * (i + 1) / total)
         try:
-            pdf = img2pdf.convert(images, layout_fun=layout, rotation=img2pdf.Rotation.ifvalid)
+            # outputstream: 결과를 메모리에 한 번 더 쌓지 않고 바로 파일에 쓴다 (사진 수백 장일 때 메모리 절약)
+            with open(job.output, "wb") as fh:
+                img2pdf.convert(images, layout_fun=layout, rotation=img2pdf.Rotation.ifvalid, outputstream=fh)
         except Exception:
             # 특이한 형식이면 Pillow 로 다시 저장해서 한 번 더 시도
             images = []
@@ -151,10 +153,10 @@ class ImagesToPdf(Converter):
                     flatten(ImageOps.exif_transpose(frame.copy())).save(buf, "PNG")
                     images.append(buf.getvalue())
             try:
-                pdf = img2pdf.convert(images, layout_fun=layout)
+                with open(job.output, "wb") as fh:
+                    img2pdf.convert(images, layout_fun=layout, outputstream=fh)
             except Exception as exc:
                 raise ConvertError(f"PDF 만들기 실패: {exc}") from exc
-        job.output.write_bytes(pdf)
         return [job.output]
 
 

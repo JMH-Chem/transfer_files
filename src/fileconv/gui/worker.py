@@ -33,7 +33,8 @@ class ConvertWorker(QThread):
                 self.outputs.extend(result.outputs)
                 names = ", ".join(p.name for p in result.outputs[:3])
                 more = f" 외 {len(result.outputs) - 3}개" if len(result.outputs) > 3 else ""
-                self.task_done.emit(i, True, f"{names}{more} ({result.seconds:.1f}초)")
+                note = f" — {result.note}" if result.note else ""
+                self.task_done.emit(i, True, f"{names}{more} ({result.seconds:.1f}초){note}")
             else:
                 failed += 1
                 self.task_done.emit(i, False, result.error or "실패")

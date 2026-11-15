@@ -41,6 +41,7 @@ class TaskResult:
     error: str | None = None
     seconds: float = 0.0
     cancelled: bool = False
+    note: str = ""
 
     @property
     def ok(self) -> bool:
@@ -225,6 +226,7 @@ def _run_one(index: int, task: Task, on_progress: ProgressCb | None, cancel: Can
             os.replace(temp, final)
             outputs = [final if Path(o) == temp else Path(o) for o in outputs]
         result.outputs = [Path(o) for o in outputs]
+        result.note = job.note
         succeeded = True
         if on_progress:
             on_progress(index, 1.0)

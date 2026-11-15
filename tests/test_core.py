@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from fileconv.core import engine
@@ -243,3 +241,12 @@ def test_output_file_with_many_inputs_is_clear_error(tmp_path):
         engine.plan([a, b], "pdf", output=tmp_path / "앨범.pdf")
     tasks = engine.plan([a, b], "pdf", output=tmp_path / "앨범.pdf", merge=True)
     assert len(tasks) == 1 and tasks[0].output.name == "앨범.pdf"
+
+
+def test_overwrite_reuses_numbered_name_next_to_input(tmp_path):
+    """pdf → pdf 를 덮어쓰기로 두 번 하면 '이름 (1)' 을 다시 쓴다 ('이름 (2)', '(3)' 으로 계속 늘어나지 않음)."""
+    src = _pdf(tmp_path / "a.pdf")
+    first = engine.plan([src], "pdf", overwrite=True)[0].output
+    first.write_bytes(b"old")
+    assert engine.plan([src], "pdf", overwrite=True)[0].output == first == tmp_path / "a (1).pdf"
+    assert engine.plan([src], "pdf")[0].output == tmp_path / "a (2).pdf"  # 덮어쓰기를 끄면 새 이름

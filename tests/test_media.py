@@ -1,5 +1,3 @@
-import subprocess
-
 import pytest
 
 from fileconv.core import engine
@@ -62,3 +60,20 @@ def test_merge_audio_files(video, tmp_path):
     assert duration_of(out) == pytest.approx(6.0, abs=0.4)
     [trimmed] = convert([wav, mp3], "mp3", merge=True, options={"start": "2", "end": "5"})
     assert duration_of(trimmed) == pytest.approx(3.0, abs=0.3)
+
+
+@pytest.mark.parametrize("rate", ["44100", "22050", "원본"])
+def test_opus_accepts_any_sample_rate_choice(video, rate):
+    """opus 는 정해진 샘플레이트만 받는다 → 고른 값과 가장 가까운 허용 값으로 맞춘다."""
+    [out] = convert([video], "opus", options={"sample_rate": rate})
+    assert duration_of(out) == pytest.approx(3.0, abs=0.3)
+
+
+def test_ffmpeg_error_message_is_cleaned():
+    from fileconv.converters.media import tidy_ffmpeg_errors
+
+    raw = ["[af#0:0 @ 0x56124e3a5a00] Terminating thread with return code -22 (Invalid argument)",
+           "[aost#0:0/libopus @ 0x5612] [enc:libopus @ 0x5612] Could not open encoder before EOF",
+           "[out#0/opus @ 0x5612] Nothing was written into output file, because at least one of its streams received no packets."]
+    text = tidy_ffmpeg_errors(raw)
+    assert "0x5612" not in text and "Could not open encoder before EOF" in text

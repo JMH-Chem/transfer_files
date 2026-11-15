@@ -1,13 +1,16 @@
 # 만능 파일 변환기 (fileconv) 설계안
 
-## 진행 상황 (2026-11-09 새벽 기준)
+## 진행 상황 (2026-11-15 기준)
 
 **완료**
 - 변환 엔진(core), 명령줄 `fconv`, 창 프로그램(GUI), 변환기 20종 — 사용법은 README.md
 - 1단계 기능 4종 전부 + 2단계 일부 (동영상 변환/압축, GIF, 자막 추출, 텍스트·Markdown→PDF, PDF 용량 줄이기·암호,
   음성 이어 붙이기, 이미지 회전·흑백, 한글 HWP/HWPX→텍스트, 한컴오피스가 있으면 HWP→PDF)
-- 테스트 93개 (GitHub Actions 에서 Windows·Linux 자동 실행), 별도 코드 검토 2회로 찾은 문제 20건 수정, Windows .exe 자동 빌드(Actions 의 FileConverter-windows)
+- 테스트 127개 (GitHub Actions 에서 Windows·Linux 자동 실행), Windows .exe 자동 빌드(Actions 의 FileConverter-windows)
 - 탐색기 "보내기" 메뉴 등록 `fconv sendto`
+- 코드 검토 3회: 1·2차에서 20건, 3차(전체 재검토)에서 오류 6건 + 미흡한 점 11건 수정
+  (암호 PDF 열기, 명령줄의 `[ ]` 파일 이름, 긴 숫자·제어 문자·날짜 등 표 변환, 스캔 PDF 안내,
+  도중 취소 시 파일 정리, PDF 여백·그림, 미디어 옵션, 용량 줄이기, 매크로 차단, 오류 기록)
 
 **사용자 PC(Windows)에서 직접 확인이 필요한 것** — 이 환경에는 없어서 시험하지 못함
 - MS Word/엑셀/PPT → PDF (MS Office 자동화), 한컴오피스 → PDF, `fconv sendto`, 만든 .exe 를 더블클릭해서 실행

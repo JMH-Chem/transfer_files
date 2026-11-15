@@ -207,7 +207,8 @@ def convert_cmd(
         if result.ok:
             for out in result.outputs:
                 size = human_size(out.stat().st_size) if out.exists() else "?"
-                console.print(f"[green]✓[/green] {escape(str(out))}  [dim]{size}, {result.seconds:.1f}초[/dim]")
+                note = f"  {escape(result.note)}" if result.note else ""
+                console.print(f"[green]✓[/green] {escape(str(out))}  [dim]{size}, {result.seconds:.1f}초[/dim]{note}")
         else:
             err_console.print(f"[red]✗ {escape(result.task.label)}[/red]\n  {escape(result.error or '실패')}")
     if len(results) > 1:

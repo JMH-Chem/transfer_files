@@ -26,6 +26,8 @@ CODECS: dict[str, tuple[str, bool]] = {
     "opus": ("libopus", True),
 }
 
+OPUS_RATES = (8000, 12000, 16000, 24000, 48000)
+
 _DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
 _AUDIO_STREAM_RE = re.compile(r"Stream #\d+:\d+.*?: Audio:")
 
@@ -43,12 +45,45 @@ def ffmpeg_info(path: Path) -> str:
     return proc.stderr or ""
 
 
-def probe(ffmpeg: str, path: Path) -> tuple[float | None, bool]:
-    """(재생 시간 초, 오디오 트랙 존재 여부)."""
-    info = ffmpeg_info(path)
+def parse_info(info: str) -> tuple[float | None, bool, bool]:
+    """ffmpeg_info() 결과에서 (재생 시간 초, 소리 있음, 영상 있음). 음악 파일의 앨범 표지 그림은 영상으로 치지 않는다."""
     m = _DURATION_RE.search(info)
     duration = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else None
-    return duration, bool(_AUDIO_STREAM_RE.search(info))
+    has_video = any(": Video:" in line and "attached pic" not in line
+                    for line in info.splitlines() if line.lstrip().startswith("Stream #"))
+    return duration, bool(_AUDIO_STREAM_RE.search(info)), has_video
+
+
+def probe(ffmpeg: str, path: Path) -> tuple[float | None, bool]:
+    """(재생 시간 초, 오디오 트랙 존재 여부)."""
+    duration, has_audio, _ = parse_info(ffmpeg_info(path))
+    return duration, has_audio
+
+
+def require_video(path: Path) -> tuple[float | None, bool]:
+    """영상이 들어 있는 파일인지 확인하고 (재생 시간, 소리 있음) 을 돌려준다."""
+    duration, has_audio, has_video = parse_info(ffmpeg_info(path))
+    if not has_video:
+        raise ConvertError(f"영상이 없는 파일입니다 (소리만 들어 있음): {path.name} — "
+                           "소리 형식을 바꾸려면 '동영상/음성 → 음성' 변환을 쓰세요")
+    return duration, has_audio
+
+
+_FF_PREFIX = re.compile(r"^(?:\[[^\]]*\]\s*)+")  # '[aost#0:0/libopus @ 0x5612...] ' 같은 머리말
+_FF_NOISE = ("Terminating thread", "Task finished with error code", "Nothing was written into output file",
+             "Error while filtering", "Conversion failed")
+
+
+def tidy_ffmpeg_errors(lines: list[str]) -> str:
+    """ffmpeg 오류 출력에서 메모리 주소가 든 머리말과 뒤따르는 군더더기 줄을 빼고 핵심만 남긴다."""
+    cleaned: list[str] = []
+    for line in lines:
+        text = _FF_PREFIX.sub("", line).strip()
+        if text and text not in cleaned and not any(noise in text for noise in _FF_NOISE):
+            cleaned.append(text)
+    if not cleaned and lines:
+        cleaned = [_FF_PREFIX.sub("", lines[-1]).strip()]
+    return "\n".join(cleaned[-3:])
 
 
 def run_ffmpeg(args: list[str], job: Job, duration: float | None) -> None:
@@ -86,7 +121,7 @@ def run_ffmpeg(args: list[str], job: Job, duration: float | None) -> None:
         proc.wait()
         raise
     if proc.returncode != 0:
-        detail = "\n".join(errors[-5:]) or f"종료 코드 {proc.returncode}"
+        detail = tidy_ffmpeg_errors(errors) or f"종료 코드 {proc.returncode}"
         raise ConvertError(f"ffmpeg 변환 실패: {detail}")
 
 
@@ -118,16 +153,26 @@ class ToAudio(Converter):
         return False, "ffmpeg 를 찾을 수 없습니다. 'pip install imageio-ffmpeg' 로 설치하세요."
 
     @staticmethod
+    def sample_rate(job: Job) -> str | None:
+        """ffmpeg -ar 에 줄 값 (None = 원본 그대로).
+
+        opus 는 8/12/16/24/48kHz 만 받는다 → 고른 값과 가장 가까운 허용 값으로 맞춘다 (44100 → 48000).
+        """
+        choice = job.opt("sample_rate", "원본")
+        if job.target == "opus":
+            return "48000" if choice == "원본" else str(min(OPUS_RATES, key=lambda r: abs(r - int(choice))))
+        return None if choice == "원본" else choice
+
+    @staticmethod
     def codec_args(job: Job) -> list[str]:
         """출력 형식에 맞는 코덱·비트레이트·샘플레이트·채널 인자."""
         codec, uses_bitrate = CODECS[job.target if job.target in CODECS else "mp3"]
         args = ["-c:a", codec]
         if uses_bitrate:
             args += ["-b:a", job.opt("bitrate", "192k")]
-        if job.opt("sample_rate", "원본") != "원본":
-            args += ["-ar", job.opt("sample_rate")]
-        elif job.target == "opus":
-            args += ["-ar", "48000"]  # opus 는 48kHz 등 정해진 값만 허용
+        rate = ToAudio.sample_rate(job)
+        if rate:
+            args += ["-ar", rate]
         channels = job.opt("channels", "원본")
         if channels != "원본":
             args += ["-ac", "1" if channels == "mono" else "2"]
@@ -148,8 +193,7 @@ class ToAudio(Converter):
                 raise ConvertError(f"오디오 트랙이 없는 파일입니다: {path.name}")
             total += duration or 0
             args += ["-i", str(path)]
-        rate = job.opt("sample_rate", "원본")
-        rate = "48000" if rate == "원본" else rate
+        rate = self.sample_rate(job) or "48000"
         layout = "mono" if job.opt("channels") == "mono" else "stereo"
         n = len(job.inputs)
         chain = "".join(f"[{i}:a:0]aresample={rate},aformat=sample_fmts=fltp:channel_layouts={layout}[a{i}];"
@@ -259,7 +303,7 @@ class VideoConvert(Converter):
 
     def convert(self, job: Job) -> list[Path]:
         src = job.inputs[0]
-        duration, has_audio = probe(find_ffmpeg(), src)
+        duration, has_audio = require_video(src)
         before, after, effective = _trim_args(job, src, duration)
         crf_x264, crf_vp9, q_mpeg4 = QUALITY[job.opt("quality", "보통")]
         filters: list[str] = []
@@ -306,7 +350,7 @@ class VideoToGif(Converter):
     default_output = "gif"
     priority = 4
     options = (
-        Option("width", "int", 480, "가로 크기(px)", "세로는 비율에 맞춰 자동", min=32, max=1920),
+        Option("width", "int", 480, "최대 가로(px)", "세로는 비율에 맞춰 자동. 원본보다 크게 만들지는 않습니다", min=32, max=1920),
         Option("fps", "int", 10, "초당 프레임", "높을수록 부드럽지만 파일이 커짐", min=1, max=50),
         Option("loop", "bool", True, "무한 반복"),
         *TRIM_OPTS,
@@ -317,11 +361,12 @@ class VideoToGif(Converter):
 
     def convert(self, job: Job) -> list[Path]:
         src = job.inputs[0]
-        duration, _ = probe(find_ffmpeg(), src)
+        duration, _ = require_video(src)
         before, after, effective = _trim_args(job, src, duration)
         if effective is not None and effective > 60 and job.opt("end") is None:
             raise ConvertError("GIF 는 길면 파일이 매우 커집니다. 60초 이하가 되도록 '끝 시간'을 지정하세요")
-        vf = (f"fps={job.opt('fps', 10)},scale={job.opt('width', 480)}:-1:flags=lanczos,"
+        # 가로 크기는 '최대값': 원본이 더 작으면 키우지 않는다 (키우면 흐려지고 파일만 커짐)
+        vf = (f"fps={job.opt('fps', 10)},scale='min(iw,{job.opt('width', 480)})':-1:flags=lanczos,"
               "split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5")
         args = [*before, *after, "-vf", vf, "-loop", "0" if job.opt("loop", True) else "-1", "-y", str(job.output)]
         run_ffmpeg(args, job, effective)

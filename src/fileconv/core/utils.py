@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import glob
-import os
 import re
 from pathlib import Path
 from typing import Iterable
@@ -70,11 +69,10 @@ def is_junk(path: Path) -> bool:
 def unique_path(path: Path, overwrite: bool = False, reserved: set[Path] | None = None) -> Path:
     """이미 있는 파일이면 '이름 (1).확장자' 처럼 겹치지 않는 경로를 만든다."""
     reserved = reserved if reserved is not None else set()
-    if overwrite and path.resolve() not in reserved:
-        return path
     candidate = path
     n = 1
-    while candidate.exists() or candidate.resolve() in reserved:
+    # reserved(원본 파일, 이번에 만들 다른 결과)는 덮어쓰기를 켜도 절대 쓰지 않는다
+    while candidate.resolve() in reserved or (candidate.exists() and not overwrite):
         candidate = path.with_name(f"{path.stem} ({n}){path.suffix}")
         n += 1
     return candidate
@@ -150,17 +148,3 @@ def human_size(n: int) -> str:
             return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
         size /= 1024
     return f"{n}B"
-
-
-def open_in_file_manager(path: Path) -> None:
-    """탐색기에서 폴더 열기 (GUI 용)."""
-    import subprocess
-    import sys
-
-    target = path if path.is_dir() else path.parent
-    if sys.platform == "win32":
-        os.startfile(target)  # type: ignore[attr-defined]
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(target)])
-    else:
-        subprocess.Popen(["xdg-open", str(target)])

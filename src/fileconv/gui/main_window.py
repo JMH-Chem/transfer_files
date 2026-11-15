@@ -84,8 +84,7 @@ class FileList(QListWidget):
     def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             for item in self.selectedItems():
-                self.takeItem(self.row(item))
-            self.model().rowsRemoved.emit(self.rootIndex(), 0, 0)
+                self.takeItem(self.row(item))  # 줄이 빠질 때 모델이 알아서 알리므로 개수 표시도 따라 바뀐다
         else:
             super().keyPressEvent(event)
 

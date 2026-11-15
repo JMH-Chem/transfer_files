@@ -150,3 +150,23 @@ def test_gui_does_not_remember_one_off_options(qapp):
     assert "start" not in values and "end" not in values  # 자르기 구간은 다음 파일에 적용되면 안 됨
     assert values["quality"] == "높음"  # 화질 같은 취향 설정은 기억
     w2.close()
+
+
+def test_unexpected_error_is_logged_and_shown(qapp, tmp_path, monkeypatch):
+    """창 전용 exe 에는 콘솔이 없어 오류가 그냥 사라진다 → 파일에 기록하고 안내 창을 띄운다."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from fileconv.gui import app as gui_app
+
+    log = tmp_path / "logs" / "error.log"
+    monkeypatch.setattr(gui_app, "error_log_path", lambda: log)
+    shown = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: shown.append(args[2]))
+    monkeypatch.setattr(sys, "__excepthook__", lambda *args: None)  # 테스트 출력에 가짜 오류를 찍지 않게
+    try:
+        raise RuntimeError("시험용 오류")
+    except RuntimeError as exc:
+        gui_app.handle_unexpected_error(type(exc), exc, exc.__traceback__)
+    text = log.read_text(encoding="utf-8")
+    assert "RuntimeError: 시험용 오류" in text and "Traceback" in text
+    assert shown and "시험용 오류" in shown[0] and str(log) in shown[0]

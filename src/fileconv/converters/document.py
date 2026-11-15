@@ -12,8 +12,8 @@ from pathlib import Path
 from ..core.base import Converter, Job, Option, parse_pages
 from ..core.errors import ConvertError
 from ..core.registry import register
-from ..core.tools import IS_WINDOWS as IS_WINDOWS_, find_soffice, has_ms_office, popen_kwargs
-from ..core.utils import unique_path
+from ..core.tools import IS_WINDOWS, find_soffice, has_ms_office, popen_kwargs
+from ..core.utils import human_size, unique_path
 
 PAGES_OPT = Option("pages", "pages", None, "페이지", "예: 1-3,5,8- (비우면 전체)")
 PASSWORD_OPT = Option("password", "str", "", "PDF 비밀번호", "암호가 걸린 PDF 일 때만")
@@ -182,15 +182,22 @@ class PdfCompress(Converter):
         writer = PdfWriter(clone_from=reader)
         quality, max_px = job.opt("image_quality", 60), job.opt("max_image_px", 1600)
         pages = list(writer.pages)
+        done: set[tuple[int, int]] = set()  # 이미 다시 압축한 그림 (여러 쪽이 같은 그림을 함께 쓰는 경우가 많다)
         for n, page in enumerate(pages):
             for img in list(page.images):
                 try:
-                    obj = img.indirect_reference.get_object() if img.indirect_reference else None
-                    if obj is not None and ("/SMask" in obj or "/Mask" in obj):
-                        continue  # 투명도가 있는 그림은 건드리지 않음
+                    ref = img.indirect_reference
+                    obj = ref.get_object() if ref else None
+                    if ref is not None:
+                        key = (ref.idnum, ref.generation)
+                        if key in done:
+                            continue  # 같은 그림을 쪽마다 또 압축하면 느리고 화질만 더 나빠진다
+                        done.add(key)
+                    if obj is not None and ("/SMask" in obj or "/Mask" in obj or obj.get("/ImageMask")):
+                        continue  # 투명도·마스크가 있는 그림은 건드리지 않음
                     pil = img.image
-                    if pil is None or max(pil.size) < 64:
-                        continue
+                    if pil is None or max(pil.size) < 64 or pil.mode == "1":
+                        continue  # 1비트(흑백 스캔)는 JPEG 로 바꾸면 흐려지고 오히려 커진다
                     if max_px and max(pil.size) > max_px:
                         pil = pil.copy()
                         pil.thumbnail((max_px, max_px))
@@ -209,8 +216,12 @@ class PdfCompress(Converter):
             pass
         with open(job.output, "wb") as fh:
             writer.write(fh)
-        if job.output.stat().st_size >= src.stat().st_size:  # 더 커졌으면 원본 그대로
+        before, after = src.stat().st_size, job.output.stat().st_size
+        if after >= before:  # 더 커졌으면 원본 그대로
             job.output.write_bytes(src.read_bytes())
+            job.note = "더 줄일 수 없어 원본과 같습니다"
+        else:
+            job.note = f"{human_size(before)} → {human_size(after)} ({round((1 - after / before) * 100)}% 줄어듦)"
         return [job.output]
 
 
@@ -316,6 +327,19 @@ EXCEL_EXTS = {"xlsx", "xls", "ods"}
 PPT_EXTS = {"pptx", "ppt", "odp"}
 
 
+def _block_macros(app) -> int | None:
+    """자동화로 띄운 오피스는 기본값이 '매크로 모두 허용'이다 → 문서를 열기 전에 강제 차단으로 바꾼다.
+
+    (받은 문서를 PDF 로 바꾸기만 해도 문서 안의 자동 실행 매크로가 돌 수 있기 때문) 바꾸기 전 값을 돌려준다.
+    """
+    try:
+        previous = app.AutomationSecurity
+        app.AutomationSecurity = 3  # msoAutomationSecurityForceDisable
+        return previous
+    except Exception:
+        return None
+
+
 def _office_com_to_pdf(src: Path, dst: Path) -> None:
     """Windows: 설치된 MS Office 로 PDF 저장 (pywin32 필요)."""
     import pythoncom
@@ -325,9 +349,11 @@ def _office_com_to_pdf(src: Path, dst: Path) -> None:
     pythoncom.CoInitialize()  # GUI 백그라운드 스레드에서도 동작하도록
     app = doc = None
     started_by_us = True
+    previous_security = None
     try:
         if ext in WORD_EXTS:
             app = win32com.client.DispatchEx("Word.Application")  # 새 Word 를 따로 띄움 (사용자 문서와 무관)
+            _block_macros(app)
             app.Visible = False
             app.DisplayAlerts = 0
             doc = app.Documents.Open(str(src), ReadOnly=True, AddToRecentFiles=False, ConfirmConversions=False)
@@ -335,6 +361,7 @@ def _office_com_to_pdf(src: Path, dst: Path) -> None:
             doc.Close(0)
         elif ext in EXCEL_EXTS:
             app = win32com.client.DispatchEx("Excel.Application")
+            _block_macros(app)
             app.Visible = False
             app.DisplayAlerts = False
             doc = app.Workbooks.Open(str(src), ReadOnly=True)
@@ -348,6 +375,7 @@ def _office_com_to_pdf(src: Path, dst: Path) -> None:
             except Exception:
                 started_by_us = True
             app = win32com.client.DispatchEx("PowerPoint.Application")
+            previous_security = _block_macros(app)
             doc = app.Presentations.Open(str(src), True, False, False)  # ReadOnly, Untitled, WithWindow
             doc.SaveAs(str(dst), 32)  # ppSaveAsPDF
             doc.Close()
@@ -365,6 +393,11 @@ def _office_com_to_pdf(src: Path, dst: Path) -> None:
                 app.Quit()
             except Exception:
                 pass
+        elif app is not None and previous_security is not None:
+            try:  # 사용자가 쓰던 PowerPoint 에 붙었던 경우: 매크로 설정을 원래대로
+                app.AutomationSecurity = previous_security
+            except Exception:
+                pass
         doc = app = None  # COM 객체를 모두 놓은 뒤에 CoUninitialize 해야 스레드가 죽지 않는다
         import gc
 
@@ -374,7 +407,7 @@ def _office_com_to_pdf(src: Path, dst: Path) -> None:
 
 def _kill_tree(proc: subprocess.Popen) -> None:
     """프로세스와 그 자식까지 종료 (Windows 의 soffice.exe 는 soffice.bin 을 따로 띄우기 때문)."""
-    if IS_WINDOWS_:
+    if IS_WINDOWS:
         subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, **popen_kwargs())
     proc.kill()
     proc.wait()
@@ -594,10 +627,91 @@ def _ensure_qt() -> None:
     from PySide6.QtWidgets import QApplication
 
     if QApplication.instance() is None:
-        if not IS_WINDOWS_ and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        if not IS_WINDOWS and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
             os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         # QGuiApplication 이 아닌 QApplication 으로 만들어야 같은 프로세스에서 GUI 창도 띄울 수 있다
         _qt_app = QApplication([])
+
+
+def _print_document(doc, writer, job: Job) -> None:
+    """문서를 쪽 단위로 PDF 에 그린다 (오른쪽 아래에 쪽 번호).
+
+    QTextDocument.print_() 를 쓰지 않는 이유: 그 함수는 지정한 여백에 2cm 를 더 얹어서
+    '여백 20mm' 가 실제로는 40mm 가 된다. 여기서는 PDF 의 여백 안쪽 영역을 그대로 글 영역으로 쓴다.
+    """
+    from PySide6.QtCore import QRectF, QSizeF, Qt
+    from PySide6.QtGui import QAbstractTextDocumentLayout, QFont, QPainter, QPalette
+
+    layout = doc.documentLayout()
+    layout.setPaintDevice(writer)  # 글자·그림 크기를 PDF 해상도 기준으로 계산
+    width, height = float(writer.width()), float(writer.height())  # 여백 안쪽 영역 (PDF 해상도 픽셀)
+    footer = writer.logicalDpiY() * 0.3  # 쪽 번호 자리 (약 7.6mm)
+    body = height - footer
+    if width <= 0 or body <= 0:
+        raise ConvertError("여백이 너무 커서 글을 넣을 자리가 없습니다. 여백을 줄이세요")
+    doc.setDocumentMargin(0)
+    doc.setPageSize(QSizeF(width, body))
+    number_font = QFont(doc.defaultFont())
+    number_font.setPointSizeF(max(7.0, doc.defaultFont().pointSizeF() * 0.8))
+
+    painter = QPainter()
+    if not painter.begin(writer):
+        raise ConvertError("PDF 를 만들지 못했습니다 (파일을 쓸 수 없음)")
+    try:
+        pages = max(1, doc.pageCount())
+        for page in range(pages):
+            if page:
+                writer.newPage()
+            area = QRectF(0, page * body, width, body)
+            context = QAbstractTextDocumentLayout.PaintContext()
+            context.clip = area
+            context.palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.black)  # 어두운 테마에서도 검은 글자
+            painter.save()
+            painter.translate(0, -page * body)
+            painter.setClipRect(area)
+            layout.draw(painter, context)
+            painter.restore()
+            painter.setFont(number_font)
+            painter.setPen(Qt.GlobalColor.black)
+            painter.drawText(QRectF(0, body, width, footer),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom, str(page + 1))
+            job.progress(0.4 + 0.6 * (page + 1) / pages)
+    finally:
+        painter.end()  # 여기서 PDF 파일이 완성된다
+
+
+def _fit_images(doc, max_width: float) -> None:
+    """글 영역보다 넓은 그림(화면 캡처 등)을 비율을 지키며 줄인다. 그대로 두면 오른쪽이 잘린 채 인쇄된다."""
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QTextCursor, QTextDocument
+
+    changes = []
+    block = doc.begin()
+    while block.isValid():
+        it = block.begin()
+        while not it.atEnd():
+            fragment = it.fragment()
+            fmt = fragment.charFormat()
+            if fmt.isImageFormat():
+                image = fmt.toImageFormat()
+                width, height = image.width(), image.height()
+                if not width or not height:
+                    picture = doc.resource(QTextDocument.ResourceType.ImageResource, QUrl(image.name()))
+                    if picture is not None and hasattr(picture, "width") and picture.width() > 0:
+                        ratio = picture.height() / picture.width()
+                        width = width or (height / ratio if height else picture.width())
+                        height = height or width * ratio
+                if width and height and width > max_width:
+                    image.setHeight(height * max_width / width)
+                    image.setWidth(max_width)
+                    changes.append((fragment.position(), fragment.length(), image))
+            it += 1
+        block = block.next()
+    for position, length, image in changes:  # 훑는 도중에 문서를 고치지 않도록 모아서 적용
+        cursor = QTextCursor(doc)
+        cursor.setPosition(position)
+        cursor.setPosition(position + length, QTextCursor.MoveMode.KeepAnchor)
+        cursor.setCharFormat(image)
 
 
 def _default_font() -> str:
@@ -642,7 +756,7 @@ class TextToPdf(Converter):
 
     def convert(self, job: Job) -> list[Path]:
         _ensure_qt()
-        from PySide6.QtCore import QMarginsF
+        from PySide6.QtCore import QMarginsF, QUrl
         from PySide6.QtGui import QFont, QPageLayout, QPageSize, QPdfWriter, QTextDocument
 
         from ..core.utils import read_text_auto
@@ -658,6 +772,10 @@ class TextToPdf(Converter):
         doc.setDefaultFont(QFont(mono if (ext == "txt" and job.opt("monospace")) else family, size))
         doc.setDefaultStyleSheet(PRINT_CSS % {"size": size, "h1": size * 2, "h2": int(size * 1.6),
                                               "h3": int(size * 1.3), "mono": f"'{mono}'"})
+        # 문서 안의 그림 경로(![](pic.png), <img src="pic.png">)를 문서가 있는 폴더 기준으로 찾게 한다.
+        # (setBaseUrl 로는 안 되고 DocumentUrl 을 지정해야 한다. 지정하지 않으면 '프로그램을 실행한 폴더' 기준이 된다)
+        doc.setMetaInformation(QTextDocument.MetaInformation.DocumentUrl,
+                               QUrl.fromLocalFile(str(src.resolve().parent) + "/").toString())
         if ext == "md":
             import markdown
 
@@ -682,8 +800,9 @@ class TextToPdf(Converter):
             QPageLayout.Unit.Millimeter,
         )
         writer.setPageLayout(layout)
-        doc.print_(writer)
-        del writer  # 파일을 닫아 저장을 끝냄
+        # 글 영역 너비 (그림 크기를 재는 단위인 96dpi 픽셀 기준)
+        _fit_images(doc, layout.paintRect(QPageLayout.Unit.Inch).width() * 96)
+        _print_document(doc, writer, job)
         if not job.output.exists() or job.output.stat().st_size == 0:
             raise ConvertError("PDF 를 만들지 못했습니다")
         return [job.output]

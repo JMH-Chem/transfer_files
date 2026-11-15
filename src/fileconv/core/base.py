@@ -161,6 +161,8 @@ class Job:
     overwrite: bool = False
     created: list[Path] = field(default_factory=list)
     """파일을 여러 개 만드는 변환기가 '지금 쓰려는 파일'을 적어 두는 곳. 실패·취소 시 엔진이 지운다."""
+    note: str = ""
+    """결과와 함께 보여줄 한 줄 (예: '12.3MB → 4.1MB'). 변환기가 채운다."""
 
     def new_file(self, path: Path) -> Path:
         """만들 파일을 기록하고 그대로 돌려준다:  dest = job.new_file(unique_path(...))"""

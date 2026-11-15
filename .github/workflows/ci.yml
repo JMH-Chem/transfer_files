@@ -1,8 +1,7 @@
 name: CI
 
 on:
-  push:
-  pull_request:
+  push:            # 같은 저장소의 브랜치는 push 때 한 번만 돌린다 (PR 에도 이 결과가 표시됨)
   workflow_dispatch:
 
 jobs:

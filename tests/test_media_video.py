@@ -48,3 +48,17 @@ def test_portrait_video_resolution_uses_short_side(tmp_path):
 
     w, h = map(int, re.search(r", (\d+)x(\d+)", ffmpeg_info(out)).groups())
     assert (w, h) == (240, 426)  # 짧은 변(가로)이 240
+
+
+def test_gif_is_not_enlarged(video):
+    [gif] = convert([video], "gif")  # 원본 가로 160px, 기본 '가로 크기' 480
+    assert Image.open(gif).size == (160, 120)
+
+
+def test_file_without_video_gives_clear_error(tmp_path):
+    audio_only = tmp_path / "소리만.mp4"
+    subprocess.run([find_ffmpeg(), "-loglevel", "error", "-f", "lavfi", "-i", "sine=d=1", "-c:a", "aac", str(audio_only)],
+                   check=True)
+    for target in ("mkv", "gif"):
+        [result] = engine.run(engine.plan([audio_only], target))
+        assert not result.ok and "영상이 없는 파일" in result.error
