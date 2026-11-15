@@ -319,7 +319,8 @@ def _ink_box(pdf_path, page=0):
 def test_pdf_margin_matches_option(tmp_path, margin_mm):
     """'여백' 옵션에 적은 값이 실제 여백이다 (예전에는 2cm 가 더 붙어 20mm → 40mm 였다)."""
     txt = tmp_path / "가득.txt"
-    txt.write_text(("가나다라마바사아자차카타파하 " * 40 + "\n") * 60, encoding="utf-8")
+    # 띄어쓰기 없는 한글: 낱말 단위 줄바꿈이 없어 줄이 오른쪽 여백까지 꽉 찬다 (글꼴이 달라도 한 글자 폭 이내)
+    txt.write_text(("가" * 400 + "\n") * 40, encoding="utf-8")
     [pdf] = convert([txt], "pdf", options={"margin_mm": str(margin_mm)})
     left, top, right, bottom = _ink_box(pdf)
     expected = margin_mm / 25.4 * 72
